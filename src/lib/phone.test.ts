@@ -1,0 +1,3 @@
+import { describe,expect,it } from "vitest";
+import { normalizeIndianMobile,toInternationalMobile,toWhatsAppNumber } from "@/lib/phone";
+describe("Indian mobile number normalization",()=>{it("removes country prefix, spaces and leading zero",()=>{expect(normalizeIndianMobile(" +91 09876 543210 ")).toBe("9876543210")});it("formats gateway and WhatsApp destinations internationally",()=>{expect(toInternationalMobile("9876543210")).toBe("+919876543210");expect(toWhatsAppNumber("9876543210")).toBe("919876543210")});it("rejects invalid and spreadsheet-scientific notation",()=>{expect(()=>normalizeIndianMobile("12345")).toThrow("10-digit");expect(()=>normalizeIndianMobile("9.0E+09")).toThrow("scientific notation")})});

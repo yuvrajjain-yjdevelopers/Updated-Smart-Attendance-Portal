@@ -2,4 +2,5 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
-export async function PUT(request: Request) { const user = await currentUser(); if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 }); const parsed = z.object({ mobile: z.string().trim().min(8).max(20) }).safeParse(await request.json()); if (!parsed.success) return NextResponse.json({ error: "Enter a valid contact number" }, { status: 400 }); await db.user.update({ where: { id: user.id }, data: { mobile: parsed.data.mobile } }); return NextResponse.json({ ok: true }); }
+import { normalizeIndianMobile } from "@/lib/phone";
+export async function PUT(request: Request) { const user = await currentUser(); if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 }); const parsed = z.object({ mobile: z.string().trim().min(1).max(20) }).safeParse(await request.json()); if (!parsed.success) return NextResponse.json({ error: "Enter a valid contact number" }, { status: 400 });try{const mobile=normalizeIndianMobile(parsed.data.mobile);await db.user.update({ where: { id: user.id }, data: { mobile } }); return NextResponse.json({ ok: true });}catch(error){return NextResponse.json({error:error instanceof Error?error.message:"Enter a valid contact number"},{status:400});} }

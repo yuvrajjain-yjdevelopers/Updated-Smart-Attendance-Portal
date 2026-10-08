@@ -3,92 +3,147 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider  = "postgresql"
   url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
-enum Role { HOD TEACHER }
-enum SmsGatewayMode { LOCAL CLOUD }
-enum MessageChannel { SMS WHATSAPP }
-enum MessageStatus { QUEUED SENT FAILED OPENED SKIPPED }
+enum Role {
+  HOD
+  TEACHER
+}
+
+enum SmsGatewayMode {
+  LOCAL
+  CLOUD
+}
+
+enum MessageChannel {
+  SMS
+  WHATSAPP
+}
+
+enum MessageStatus {
+  QUEUED
+  SENT
+  FAILED
+  OPENED
+  SKIPPED
+}
 
 model User {
-  id String @id @default(cuid())
-  username String @unique
-  name String
-  passwordHash String
-  role Role @default(TEACHER)
-  sectionId String?
-  section Section? @relation(fields: [sectionId], references: [id], onDelete: SetNull)
-  canSend Boolean @default(true)
-  active Boolean @default(true)
-  mobile String?
-  smsGatewayMode SmsGatewayMode?
-  smsGatewayUrl String?
-  smsGatewayUser String?
-  smsGatewayPassEnc String?
-  smsGatewaySenderNumber String?
-  smsGatewayLastTestAt DateTime?
-  smsGatewayLastTestOk Boolean?
-  lastLoginAt DateTime?
-  batches MessageBatch[]
-  createdAt DateTime @default(now())
+  id                             String          @id @default(cuid())
+  username                       String          @unique
+  name                           String
+  passwordHash                   String
+  role                           Role            @default(TEACHER)
+  sectionId                      String?
+  section                        Section?        @relation(fields: [sectionId], references: [id], onDelete: SetNull)
+  canSend                        Boolean         @default(true)
+  active                         Boolean         @default(true)
+  mobile                         String?
+  smsGatewayMode                 SmsGatewayMode?
+  smsGatewayUrl                  String?
+  smsGatewayUser                 String?
+  smsGatewayPassEnc              String?
+  smsGatewaySenderNumber         String?
+  smsGatewayLastTestAt           DateTime?
+  smsGatewayLastSuccessfulTestAt DateTime?
+  smsGatewayLastTestOk           Boolean?
+  lastLoginAt                    DateTime?
+  batches                        MessageBatch[]
+  createdAt                      DateTime        @default(now())
 }
 
 model Section {
-  id String @id @default(cuid())
-  name String @unique
-  users User[]
-  students Student[]
-  batches MessageBatch[]
-  createdAt DateTime @default(now())
+  id        String            @id @default(cuid())
+  name      String            @unique
+  users     User[]
+  students  Student[]
+  batches   MessageBatch[]
+  uploads   DetentionUpload[]
+  createdAt DateTime          @default(now())
 }
 
 model Student {
-  id String @id @default(cuid())
-  regNo String @unique
-  name String
-  sectionId String
-  section Section @relation(fields: [sectionId], references: [id], onDelete: Cascade)
-  parentMobile String
-  avgAtt Float?
-  isDetained Boolean @default(false)
-  detainedSubjects String @default("[]")
-  logs MessageLog[]
+  id                 String           @id @default(cuid())
+  regNo              String           @unique
+  name               String
+  sectionId          String
+  section            Section          @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  parentMobile       String
+  studentMobile      String?
+  branch             String?
+  totalAttendancePct Float?
+  avgAtt             Float?
+  isDetained         Boolean          @default(false)
+  detainedSubjects   String           @default("[]")
+  lowSubjectCount    Int              @default(0)
+  lastListDate       DateTime?
+  updatedAt          DateTime         @default(now()) @updatedAt
+  logs               MessageLog[]
+  entries            DetentionEntry[]
+}
+
+model DetentionUpload {
+  id            String           @id @default(cuid())
+  sectionId     String
+  section       Section          @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  uploadedById  String
+  uptoDate      DateTime
+  sourceType    String
+  fileName      String
+  parsedCount   Int
+  matchedCount  Int
+  detainedCount Int
+  entries       DetentionEntry[]
+  createdAt     DateTime         @default(now())
+
+  @@unique([sectionId, uptoDate])
+}
+
+model DetentionEntry {
+  id               String          @id @default(cuid())
+  uploadId         String
+  upload           DetentionUpload @relation(fields: [uploadId], references: [id], onDelete: Cascade)
+  studentId        String
+  student          Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  avgAtt           Float
+  detainedSubjects String          @default("[]")
 }
 
 model MessageBatch {
-  id String @id @default(cuid())
-  sectionId String
-  section Section @relation(fields: [sectionId], references: [id], onDelete: Cascade)
-  sentById String
-  sentBy User @relation(fields: [sentById], references: [id])
+  id         String       @id @default(cuid())
+  sectionId  String
+  section    Section      @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  sentById   String
+  sentBy     User         @relation(fields: [sentById], references: [id])
   senderName String
-  channels String
-  total Int
-  testMode Boolean @default(false)
-  logs MessageLog[]
-  createdAt DateTime @default(now())
+  channels   String
+  total      Int
+  testMode   Boolean      @default(false)
+  logs       MessageLog[]
+  createdAt  DateTime     @default(now())
 }
 
 model MessageLog {
-  id String @id @default(cuid())
-  batchId String
-  batch MessageBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  studentId String
-  student Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
-  sentById String
+  id         String         @id @default(cuid())
+  batchId    String
+  batch      MessageBatch   @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  studentId  String
+  student    Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  sentById   String
   senderName String
-  channel MessageChannel
-  status MessageStatus @default(QUEUED)
-  error String?
-  listDate DateTime?
-  toNumber String
-  text String
-  createdAt DateTime @default(now())
+  channel    MessageChannel
+  status     MessageStatus  @default(QUEUED)
+  error      String?
+  listDate   DateTime?
+  toNumber   String
+  text       String
+  createdAt  DateTime       @default(now())
 }
 
 model Setting {
-  key String @id
+  key   String @id
   value String
 }
