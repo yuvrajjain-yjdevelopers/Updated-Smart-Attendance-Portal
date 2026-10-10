@@ -127,8 +127,8 @@ model MessageBatch {
   id         String       @id @default(cuid())
   sectionId  String
   section    Section      @relation(fields: [sectionId], references: [id], onDelete: Cascade)
-  sentById   String
-  sentBy     User         @relation(fields: [sentById], references: [id])
+  sentById   String?
+  sentBy     User?        @relation(fields: [sentById], references: [id], onDelete: SetNull)
   senderName String
   channels   String
   total      Int

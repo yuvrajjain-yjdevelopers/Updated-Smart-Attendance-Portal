@@ -144,11 +144,14 @@ export default function TeachersPage() {
   }
 
   async function remove(teacher: Teacher) {
-    if (!window.confirm(`Remove ${teacher.name} from the teacher list? Their access will be disabled.`)) return;
+    if (!window.confirm(`Permanently remove ${teacher.name}'s teacher account? Their sign-in and saved phone settings will be deleted. Existing message history will be kept.`)) return;
     const response = await fetch(`/api/teachers?id=${teacher.id}`, { method: "DELETE" });
     const data = await response.json();
     if (!response.ok) setError(data.error);
-    else await load();
+    else {
+      setError("");
+      await load();
+    }
   }
 
   async function copy(value: string) {
