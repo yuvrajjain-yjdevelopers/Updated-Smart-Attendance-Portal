@@ -3,46 +3,42 @@ import { db } from "@/lib/db";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import { ArrowUpRight,GraduationCap,Layers3,MessageSquareText,UserRoundCheck } from "lucide-react";
+import { Button, Card, PageHeader, StatCard } from "@/app/components/ui";
+import { ensurePreparedForSender } from "@/lib/preparedMessages";
+import { DEFAULT_ATTENDANCE_THRESHOLD, getStatus } from "@/lib/attendance";
 export const dynamic="force-dynamic";
 export default async function Dashboard() {
   const user = await currentUser();
   if (!user) redirect("/login");
   if (user.role !== "HOD") redirect("/my-class");
 
-  const [students, detained, sections, messages] = await Promise.all([
-    db.student.count(),
-    db.student.count({ where: { isDetained: true } }),
+  await ensurePreparedForSender(user.id);
+  const [studentRows, sections, messages, ready] = await Promise.all([
+    db.student.findMany({ select: { avgAtt: true, totalAttendancePct: true, lastListDate: true, isDetained: true, lowSubjectCount: true } }),
     db.section.count(),
-    db.messageLog.count({ where: { status: "SENT", createdAt: { gte: new Date(new Date().setHours(0, 0, 0, 0)) } } }),
+    db.messageLog.count({ where: { status: { in: ["SENT", "SENT_BY_USER"] }, createdAt: { gte: new Date(new Date().setHours(0, 0, 0, 0)) } } }),
+    db.preparedMessage.count({ where: { senderId: user.id, status: "READY" } }),
   ]);
+  const students = studentRows.length;
+  const detained = studentRows.filter(student => ["Detained", "Below 75% (roster)"].includes(getStatus(student, DEFAULT_ATTENDANCE_THRESHOLD))).length;
   const stats = [
     { label: "Total students", value: students, icon: GraduationCap, accent: "teal", foot: "Across all sections" },
     { label: "Need follow-up", value: detained, icon: UserRoundCheck, accent: "rose", foot: "Attendance below threshold" },
     { label: "Sections", value: sections, icon: Layers3, accent: "blue", foot: "Active class groups" },
-    { label: "Messages today", value: messages, icon: MessageSquareText, accent: "amber", foot: "Successfully sent" },
+    { label: "Messages today", value: messages, icon: MessageSquareText, accent: "amber", foot: "Sender-confirmed sends" },
+    { label: "Ready to send", value: ready, icon: MessageSquareText, accent: "teal", foot: "Prepared for your account" },
   ];
 
   return (
     <main className="dashboard-page">
-      <section className="dashboard-welcome">
-        <div>
-          <p className="eyebrow">DEPARTMENT OVERVIEW</p>
-          <h1>Good day, {user.name.split(" ")[0]} <span>✦</span></h1>
-          <p>Here’s the latest picture of attendance follow-up across your sections.</p>
-        </div>
-        <Link href="/sections" className="dashboard-action">View sections <ArrowUpRight size={16} /></Link>
-      </section>
+      <PageHeader eyebrow="DEPARTMENT OVERVIEW" title={<>Good day, {user.name.split(" ")[0]} <span>✦</span></>} subtitle="Here’s the latest picture of attendance follow-up across your sections." actions={<Button href="/sections" variant="outline" className="dashboard-action">View sections <ArrowUpRight size={16} /></Button>} className="dashboard-welcome" />
       <section className="metric-grid">
         {stats.map(({ label, value, icon: Icon, accent, foot }) => (
-          <article className={`metric-card ${accent}`} key={label}>
-            <div className="metric-top"><span>{label}</span><span className="metric-icon"><Icon size={18} /></span></div>
-            <b className="metric-value">{value}</b>
-            <small>{foot}</small>
-          </article>
+          <StatCard key={label} label={label} value={value} note={foot} icon={<Icon size={18} aria-hidden="true" />} accent={accent as "teal" | "rose" | "blue" | "amber"} />
         ))}
       </section>
       <section className="dashboard-lower">
-        <article className="welcome-card">
+        <Card className="welcome-card">
           <div className="welcome-card-icon"><GraduationCap size={22} /></div>
           <p className="eyebrow">GET STARTED</p>
           <h2>Build your student directory</h2>
@@ -51,8 +47,8 @@ export default async function Dashboard() {
             <Link href="/students">Upload student details <ArrowUpRight size={15} /></Link>
             <Link href="/settings#phone-setup">Set up sender phone</Link>
           </div>
-        </article>
-        <article className="workflow-card">
+        </Card>
+        <Card className="workflow-card">
           <p className="eyebrow">A SIMPLE WORKFLOW</p>
           <h2>Attendance follow-up</h2>
           <ol>
@@ -60,7 +56,7 @@ export default async function Dashboard() {
             <li><span>02</span><div><b>Preview the detention list</b><small>Check unmatched students before applying.</small></div></li>
             <li><span>03</span><div><b>Message parents</b><small>Review recipients before each send.</small></div></li>
           </ol>
-        </article>
+        </Card>
       </section>
     </main>
   );

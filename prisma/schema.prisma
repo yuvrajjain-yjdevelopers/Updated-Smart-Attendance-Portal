@@ -23,12 +23,21 @@ enum MessageChannel {
   WHATSAPP
 }
 
+enum PreparedStatus {
+  READY
+  MISSING_NUMBER
+  SENT
+  OPENED
+  SKIPPED
+}
+
 enum MessageStatus {
   QUEUED
   SENT
   FAILED
   OPENED
   SKIPPED
+  SENT_BY_USER
 }
 
 model User {
@@ -51,6 +60,7 @@ model User {
   smsGatewayLastSuccessfulTestAt DateTime?
   smsGatewayLastTestOk           Boolean?
   lastLoginAt                    DateTime?
+  preparedMessages              PreparedMessage[]
   batches                        MessageBatch[]
   createdAt                      DateTime        @default(now())
 }
@@ -81,6 +91,7 @@ model Student {
   lowSubjectCount    Int              @default(0)
   lastListDate       DateTime?
   updatedAt          DateTime         @default(now()) @updatedAt
+  preparedMessages   PreparedMessage[]
   logs               MessageLog[]
   entries            DetentionEntry[]
 }
@@ -126,6 +137,22 @@ model MessageBatch {
   createdAt  DateTime     @default(now())
 }
 
+model PreparedMessage {
+  id        String         @id @default(cuid())
+  studentId String
+  student   Student        @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  senderId  String
+  sender    User           @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  channel   MessageChannel
+  status    PreparedStatus @default(READY)
+  toNumber  String?
+  text      String
+  listDate  DateTime?
+  updatedAt DateTime       @updatedAt
+  @@unique([studentId, senderId, channel])
+  @@index([senderId, status])
+}
+
 model MessageLog {
   id         String         @id @default(cuid())
   batchId    String
@@ -136,6 +163,7 @@ model MessageLog {
   senderName String
   channel    MessageChannel
   status     MessageStatus  @default(QUEUED)
+  mode       String?
   error      String?
   listDate   DateTime?
   toNumber   String

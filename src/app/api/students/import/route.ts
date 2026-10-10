@@ -4,6 +4,7 @@ import ExcelJS from "exceljs";
 import { z } from "zod";
 import { currentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { regeneratePreparedMessages } from "@/lib/preparedMessages";
 import { validateStudentRows,errorReportCsv } from "@/lib/studentImport";
 export const dynamic = "force-dynamic";
 
@@ -42,7 +43,8 @@ export async function POST(request:Request) {
   if(missingNames.length&&!createSections)return NextResponse.json({error:`Create these sections first: ${missingNames.join(", ")}`},{status:400});
   await db.$transaction(async tx=>{
     for(const name of missingNames){const section=await tx.section.create({data:{name}});currentSections.set(name.toLowerCase(),section);}
-    for(const row of checked.records){const section=currentSections.get(row.section.toLowerCase())!;await tx.student.upsert({where:{regNo:row.regNo},update:{name:row.name,sectionId:section.id,parentMobile:row.parentMobile,studentMobile:row.studentMobile,branch:row.branch,totalAttendancePct:row.totalAttendancePct},create:{regNo:row.regNo,name:row.name,sectionId:section.id,parentMobile:row.parentMobile,studentMobile:row.studentMobile,branch:row.branch,totalAttendancePct:row.totalAttendancePct}});}
+    for(const row of checked.records){const section=currentSections.get(row.section.toLowerCase())!;const attendance=row.totalAttendancePct;await tx.student.upsert({where:{regNo:row.regNo},update:{name:row.name,sectionId:section.id,parentMobile:row.parentMobile,studentMobile:row.studentMobile,branch:row.branch,totalAttendancePct:attendance},create:{regNo:row.regNo,name:row.name,sectionId:section.id,parentMobile:row.parentMobile,studentMobile:row.studentMobile,branch:row.branch,totalAttendancePct:attendance}});}
   });
+  await regeneratePreparedMessages();
   return NextResponse.json({imported:checked.records.length,message:`Imported ${checked.records.length} student rows`});
 }

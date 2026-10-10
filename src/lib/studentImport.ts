@@ -1,4 +1,5 @@
 import { normalizeIndianMobile } from "@/lib/phone";
+import { attendanceAsPercent } from "@/lib/attendance";
 
 export const STUDENT_FIELDS = ["reg_no","name","section","branch","total_attendance_pct","student_mobile","parent_mobile"] as const;
 const ALIASES: Record<(typeof STUDENT_FIELDS)[number], string[]> = {
@@ -41,7 +42,7 @@ export function validateStudentRows(rows: Record<string,string>[], headers: stri
     const regNo=get("reg_no");const name=get("name");const section=get("section");
     if(!regNo||!name||!section){errors.push({row:index+2,type:"Missing required value",message:"Registration number, student name, and section are required",values});return;}
     if(regNo.length>100){errors.push({row:index+2,type:"Invalid registration number",message:"Registration number is longer than 100 characters",values});return;}
-    const pctText=get("total_attendance_pct");const pct=pctText?Number(pctText.replace("%","")):null;
+    const pctText=get("total_attendance_pct");const parsedPct=pctText?Number(pctText.replace("%","")):null;const pct=pctText.includes("%")?parsedPct:attendanceAsPercent(parsedPct);
     if(pctText&&(pct===null||!Number.isFinite(pct)||pct<0||pct>100)){errors.push({row:index+2,type:"Invalid attendance",message:"Attendance must be a number from 0 to 100",values});return;}
     try {
       const parent=get("parent_mobile");const student=get("student_mobile");

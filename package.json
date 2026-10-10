@@ -3,15 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "vercel-build": "prisma migrate deploy && next build",
+    "dev": "prisma generate --schema prisma/schema.sqlite.prisma && next dev --webpack",
+    "build": "prisma generate && next build --webpack",
+    "vercel-build": "node scripts/vercel-build.mjs",
     "db:migrate:deploy": "prisma migrate deploy",
     "admin:create": "node --env-file=.env scripts/create-hod.mjs",
+    "admin:create:production": "prisma generate --schema prisma/schema.prisma && node --env-file=.env.production.local scripts/create-hod.mjs",
     "start": "next start",
-    "lint": "eslint .",
+    "lint": "eslint src prisma scripts vitest.config.mts next.config.ts",
     "test": "vitest run",
-    "seed": "node --env-file=.env prisma/seed.mjs",
+    "test:e2e": "playwright test",
+    "seed": "prisma generate --schema prisma/schema.sqlite.prisma && node --env-file=.env prisma/seed.mjs",
+    "db:push:local": "prisma db push --schema prisma/schema.sqlite.prisma",
     "postinstall": "prisma generate"
   },
   "dependencies": {
@@ -31,6 +34,8 @@
     "zod": "^4.6.5"
   },
   "devDependencies": {
+    "@playwright/test": "^1.64.0",
+    "@tailwindcss/postcss": "^4.3.3",
     "@tailwindcss/turbopack": "^4",
     "@types/node": "^20",
     "@types/papaparse": "^5.5.2",

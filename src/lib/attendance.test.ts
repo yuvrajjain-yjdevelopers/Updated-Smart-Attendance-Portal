@@ -1,3 +1,14 @@
 import { describe,expect,it } from "vitest";
-import { isDetained,shouldSkipDuplicate } from "@/lib/attendance";
-describe("attendance and duplicate rules",()=>{it("uses a strict attendance threshold",()=>{expect(isDetained(74.9)).toBe(true);expect(isDetained(75)).toBe(false)});it("skips a sent message unless resending was requested",()=>{expect(shouldSkipDuplicate(["SENT"])).toBe(true);expect(shouldSkipDuplicate(["OPENED"])).toBe(true);expect(shouldSkipDuplicate(["FAILED"])).toBe(false);expect(shouldSkipDuplicate(["SENT"],true)).toBe(false)})});
+import { attendanceAsPercent,getAttendanceView,getEffectiveAttendance,getStatus,isDetained,shouldSkipDuplicate } from "@/lib/attendance";
+import { parseDetainedSubjects,resolveDetainedSubjectCodes } from "@/lib/detentionSubjects";
+describe("attendance and duplicate rules",()=>{it("uses a strict attendance threshold",()=>{expect(isDetained(74.9)).toBe(true);expect(isDetained(75)).toBe(false)});it("normalizes decimal attendance fractions from college workbooks",()=>{expect(attendanceAsPercent(0.55)).toBe(55);expect(attendanceAsPercent(55)).toBe(55);expect(attendanceAsPercent(null)).toBeNull()});it("skips a sent message unless resending was requested",()=>{expect(shouldSkipDuplicate(["SENT"])).toBe(true);expect(shouldSkipDuplicate(["OPENED"])).toBe(true);expect(shouldSkipDuplicate(["FAILED"])).toBe(false);expect(shouldSkipDuplicate(["SENT"],true)).toBe(false)})});
+describe("detention subject names",()=>{it("maps provided subject codes to full names",()=>{expect(resolveDetainedSubjectCodes("UNHUPR101 - , UNITPR102 -")).toEqual([{code:"UNHUPR101",name:"Communication Skills Practical"},{code:"UNITPR102",name:"Programming for Problem Solving Practical"}])});it("reads saved subject objects for display",()=>{expect(parseDetainedSubjects(JSON.stringify([{code:"UNHUT101",name:"UNHUT101"}]))[0]).toEqual({code:"UNHUT101",name:"Communication Skills"})})});
+describe("effective attendance status",()=>{
+ const roster={avgAtt:null,totalAttendancePct:65,isDetained:false,lastListDate:null,lowSubjectCount:0};
+ it("labels below-threshold roster-only students consistently",()=>{expect(getEffectiveAttendance(roster)).toMatchObject({pct:65,source:"ROSTER",listDate:null});expect(getStatus(roster)).toBe("Below 75% (roster)")});
+ it("uses the detention-list AVG for a student in the latest list",()=>{const student={...roster,avgAtt:61,lastListDate:new Date("2026-10-10T00:00:00Z"),isDetained:true};expect(getEffectiveAttendance(student)).toMatchObject({pct:61,source:"LIST"});expect(getStatus(student)).toBe("Detained")});
+ it("distinguishes list AVG OK with low subjects",()=>{expect(getStatus({...roster,avgAtt:82,lastListDate:new Date(),lowSubjectCount:2})).toBe("AVG OK (low in 2 subjects)")});
+ it("labels known attendance at or above threshold On track",()=>{expect(getStatus({...roster,totalAttendancePct:75})).toBe("On track")});
+ it("labels students with no attendance as No data",()=>{expect(getEffectiveAttendance({...roster,totalAttendancePct:null})).toMatchObject({pct:null,source:"NONE"});expect(getStatus({...roster,totalAttendancePct:null})).toBe("No data")});
+ it("provides one view model for directory, section, and send previews",()=>{const view=getAttendanceView(roster);expect(view).toEqual({pct:65,source:"ROSTER",listDate:null,sourceLabel:"Roster",status:"Below 75% (roster)"})});
+});

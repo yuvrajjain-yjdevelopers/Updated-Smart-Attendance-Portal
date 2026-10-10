@@ -12,9 +12,12 @@
 
 # testing
 /coverage
+/test-results/
 
 # next.js
 /.next/
+/.next-local/
+/.next-runtime-verify/
 /out/
 
 # production
@@ -41,3 +44,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+.next-send-center-*/
+.next-attendance-verify/
+.next-attendance-build/
+.next-attendance-local/
+.next-attendance-live/
+.next-attendance-fix-build/
+.next-supabase-setup-build/

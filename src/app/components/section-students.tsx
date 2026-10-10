@@ -1,19 +1,189 @@
 "use client";
-import { useEffect,useMemo,useState } from "react";
-type Student={id:string;regNo:string;name:string;parentMobile:string;studentMobile:string|null;branch:string|null;totalAttendancePct:number|null;isDetained:boolean};
-type Draft={regNo:string;name:string;parentMobile:string;studentMobile:string;branch:string;totalAttendancePct:string};
-const blank:Draft={regNo:"",name:"",parentMobile:"",studentMobile:"",branch:"",totalAttendancePct:""};
-export default function SectionStudents({sectionId}:{sectionId:string}){const [rows,setRows]=useState<Student[]>([]);const [draft,setDraft]=useState<Draft>(blank);const [editing,setEditing]=useState("");const [query,setQuery]=useState("");const [missing,setMissing]=useState(false);const [sort,setSort]=useState<"regNo"|"name">("regNo");const [notice,setNotice]=useState("");const [paste,setPaste]=useState("");const [preview,setPreview]=useState<Draft[]|null>(null);
- async function load(){const r=await fetch(`/api/sections/${sectionId}/students`);const d=await r.json();if(r.ok)setRows(d);else setNotice(d.error)}useEffect(()=>{const controller=new AbortController();fetch(`/api/sections/${sectionId}/students`,{signal:controller.signal}).then(r=>r.json()).then((d:Student[])=>setRows(d)).catch(()=>{});return()=>controller.abort()},[sectionId]);
- const visible=useMemo(()=>rows.filter(r=>(!missing||!r.parentMobile)&&`${r.regNo} ${r.name}`.toLowerCase().includes(query.toLowerCase())).sort((a,b)=>a[sort].localeCompare(b[sort])),[rows,missing,query,sort]);
- async function save(){const url=`/api/sections/${sectionId}/students${editing?`/${editing}`:""}`;const r=await fetch(url,{method:editing?"PATCH":"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...draft,totalAttendancePct:draft.totalAttendancePct===""?null:Number(draft.totalAttendancePct)})});const d=await r.json();if(!r.ok){setNotice(d.error);return}setDraft(blank);setEditing("");setNotice("Student saved");await load()}
- async function remove(row:Student){if(!confirm(`Delete ${row.name} (${row.regNo})?`))return;const r=await fetch(`/api/sections/${sectionId}/students/${row.id}`,{method:"DELETE"});const d=await r.json();setNotice(r.ok?"Student deleted":d.error);await load()}
- function parsePaste(){const lines=paste.trim().split(/\r?\n/).map(line=>line.split("\t").length===1?line.split(","):line.split("\t"));const first=lines[0].map(s=>s.trim().toLowerCase());const hasHeader=first.some(v=>["reg_no","reg no","registration no","name","student name","parent mobile"].includes(v));const data=hasHeader?lines.slice(1):lines;setPreview(data.filter(x=>x.some(v=>v.trim())).map(x=>({regNo:x[0]?.trim()||"",name:x[1]?.trim()||"",parentMobile:x[2]?.trim()||"",studentMobile:x[3]?.trim()||"",branch:x[4]?.trim()||"",totalAttendancePct:x[5]?.trim()||""})));}
- async function importPaste(){if(!preview)return;let added=0,failed=0;for(const item of preview){const r=await fetch(`/api/sections/${sectionId}/students`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({...item,totalAttendancePct:item.totalAttendancePct?Number(item.totalAttendancePct):null})});if(r.ok)added++;else failed++;}setNotice(`Imported ${added}; ${failed} failed validation or duplicated registration numbers.`);setPreview(null);setPaste("");await load()}
- async function importFile(file:File){const ext=file.name.split(".").pop()?.toLowerCase();const sig=new Uint8Array(await file.slice(0,5).arrayBuffer());if(sig[0]===37&&sig[1]===80&&sig[2]===68&&sig[3]===70&&sig[4]===45){setNotice("This is a PDF. Use Upload detention list on a section page.");return;}if(ext!=="csv"&&ext!=="xlsx"){setNotice("Student import accepts CSV or XLSX files.");return;}const body:Record<string,unknown>={fileName:file.name,targetSectionId:sectionId,createSections:false};if(ext==="csv")body.csv=await file.text();else body.contentBase64=await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(",")[1]??"");reader.onerror=()=>reject(new Error("Could not read file"));reader.readAsDataURL(file)});const r=await fetch("/api/students/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});const d=await r.json();setNotice(d.message||d.error||"Import complete");if(r.ok)await load();}
- return <section className="space-y-5 rounded-xl border bg-white p-5"><div className="flex flex-wrap items-end justify-between gap-3"><div><h2 className="text-xl font-semibold">Students · {rows.length}</h2><p className="text-sm text-slate-600">{rows.filter(s=>!s.parentMobile).length} missing parent mobile · {rows.filter(s=>s.isDetained).length} detained</p></div><a className="text-sm text-indigo-700 underline" href="/students_template.csv" download>Download student template</a></div>
- <div className="grid gap-2 md:grid-cols-3"><input className="rounded border p-2" placeholder="Registration number" value={draft.regNo} onChange={e=>setDraft({...draft,regNo:e.target.value})}/><input className="rounded border p-2" placeholder="Student name" value={draft.name} onChange={e=>setDraft({...draft,name:e.target.value})}/><input className="rounded border p-2" placeholder="Parent mobile (optional)" value={draft.parentMobile} onChange={e=>setDraft({...draft,parentMobile:e.target.value})}/><input className="rounded border p-2" placeholder="Student mobile (optional)" value={draft.studentMobile} onChange={e=>setDraft({...draft,studentMobile:e.target.value})}/><input className="rounded border p-2" placeholder="Branch" value={draft.branch} onChange={e=>setDraft({...draft,branch:e.target.value})}/><input className="rounded border p-2" placeholder="Total attendance %" value={draft.totalAttendancePct} onChange={e=>setDraft({...draft,totalAttendancePct:e.target.value})}/><button onClick={save} className="rounded bg-indigo-600 px-4 py-2 text-white">{editing?"Update student":"Add student"}</button>{editing&&<button onClick={()=>{setEditing("");setDraft(blank)}} className="rounded border px-4 py-2">Cancel</button>}</div>
- <div className="rounded border p-3"><h3 className="font-medium">Import CSV or XLSX</h3><p className="text-xs text-slate-500">Rows are assigned to Section {sectionId}.</p><input className="mt-2" type="file" accept=".csv,.xlsx" onChange={e=>{const file=e.target.files?.[0];if(file)void importFile(file).catch(()=>setNotice("Could not read this import file"))}}/></div><div className="rounded border p-3"><h3 className="font-medium">Paste rows from Excel</h3><p className="text-xs text-slate-500">Columns: Reg No, Student Name, Parent Mobile, Student Mobile, Branch, Attendance %. Include a header row if available.</p><textarea className="mt-2 w-full rounded border p-2" rows={3} value={paste} onChange={e=>setPaste(e.target.value)} placeholder="Paste tab-separated cells here"/><button onClick={parsePaste} disabled={!paste.trim()} className="mt-2 rounded border px-3 py-2 text-sm">Preview paste</button>{preview&&<div className="mt-3"><p className="text-sm">Previewing {preview.length} row(s)</p><div className="max-h-36 overflow-auto text-xs">{preview.slice(0,8).map((r,i)=><p key={i}>{r.regNo} · {r.name} · parent {r.parentMobile||"missing"}</p>)}</div><button onClick={importPaste} className="mt-2 rounded bg-indigo-600 px-3 py-2 text-sm text-white">Import pasted rows</button></div>}</div>
- <div className="flex flex-wrap gap-2"><input className="rounded border p-2" placeholder="Search students" value={query} onChange={e=>setQuery(e.target.value)}/><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={missing} onChange={e=>setMissing(e.target.checked)}/> Missing parent mobile</label><select className="rounded border p-2" value={sort} onChange={e=>setSort(e.target.value as "regNo"|"name")}><option value="regNo">Sort by registration</option><option value="name">Sort by name</option></select></div>
- <div className="overflow-x-auto"><table className="w-full text-left text-sm"><thead><tr className="bg-slate-50"><th className="p-2">Reg No</th><th className="p-2">Name</th><th className="p-2">Parent mobile</th><th className="p-2">Attendance</th><th className="p-2">Actions</th></tr></thead><tbody>{visible.map(s=><tr key={s.id} className="border-t"><td className="p-2">{s.regNo}</td><td className="p-2">{s.name}</td><td className="p-2">{s.parentMobile||<span className="text-amber-700">Missing</span>}</td><td className="p-2">{s.totalAttendancePct??"—"}{s.totalAttendancePct!==null?"%":""}</td><td className="space-x-2 p-2"><button className="underline" onClick={()=>{setEditing(s.id);setDraft({regNo:s.regNo,name:s.name,parentMobile:s.parentMobile,studentMobile:s.studentMobile||"",branch:s.branch||"",totalAttendancePct:s.totalAttendancePct?.toString()||""})}}>Edit</button><button className="text-red-700 underline" onClick={()=>remove(s)}>Delete</button></td></tr>)}</tbody></table></div>{notice&&<p role="status" className="rounded bg-blue-50 p-2 text-sm">{notice}</p>}</section>
+
+import { useEffect, useMemo, useState } from "react";
+import { parseDetainedSubjects } from "@/lib/detentionSubjects";
+
+type Student = {
+  id: string;
+  regNo: string;
+  name: string;
+  parentMobile: string;
+  studentMobile: string | null;
+  branch: string | null;
+  totalAttendancePct: number | null;
+  avgAtt: number | null;
+  isDetained: boolean;
+  detainedSubjects: string;
+  effectiveAttendance: number | null;
+  attendanceSource: "LIST" | "ROSTER" | "NONE";
+  attendanceSourceLabel: string;
+  attendanceStatus: string;
+  lowSubjectCount: number;
+};
+type Draft = {
+  regNo: string;
+  name: string;
+  parentMobile: string;
+  studentMobile: string;
+  branch: string;
+  totalAttendancePct: string;
+};
+const blank: Draft = { regNo: "", name: "", parentMobile: "", studentMobile: "", branch: "", totalAttendancePct: "" };
+
+export default function SectionStudents({ sectionId }: { sectionId: string }) {
+  const [rows, setRows] = useState<Student[]>([]);
+  const [draft, setDraft] = useState<Draft>(blank);
+  const [editing, setEditing] = useState("");
+  const [query, setQuery] = useState("");
+  const [missing, setMissing] = useState(false);
+  const [sort, setSort] = useState<"regNo" | "name">("regNo");
+  const [notice, setNotice] = useState("");
+  const [paste, setPaste] = useState("");
+  const [preview, setPreview] = useState<Draft[] | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    try {
+      const response = await fetch(`/api/sections/${sectionId}/students`);
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Could not load students.");
+      setRows(data);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not load students.");
+    }
+  }
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetch(`/api/sections/${sectionId}/students`, { signal: controller.signal })
+      .then(async response => {
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Could not load students.");
+        setRows(data);
+      })
+      .catch(error => { if (error.name !== "AbortError") setNotice("Could not load the student list. Refresh and try again."); });
+    return () => controller.abort();
+  }, [sectionId]);
+
+  const visible = useMemo(() => rows
+    .filter(row => (!missing || !row.parentMobile) && `${row.regNo} ${row.name}`.toLowerCase().includes(query.toLowerCase()))
+    .sort((a, b) => a[sort].localeCompare(b[sort])), [rows, missing, query, sort]);
+
+  async function save() {
+    setBusy(true);
+    try {
+      const url = `/api/sections/${sectionId}/students${editing ? `/${editing}` : ""}`;
+      const response = await fetch(url, {
+        method: editing ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...draft, totalAttendancePct: draft.totalAttendancePct === "" ? null : Number(draft.totalAttendancePct) }),
+      });
+      const data = await response.json();
+      if (!response.ok) { setNotice(data.error || "Could not save this student."); return; }
+      setDraft(blank);
+      setEditing("");
+      setNotice(editing ? "Student updated." : "Student added.");
+      await load();
+    } catch {
+      setNotice("Could not save this student. Check the connection and try again.");
+    } finally { setBusy(false); }
+  }
+
+  async function remove(row: Student) {
+    if (!confirm(`Delete ${row.name} (${row.regNo})?`)) return;
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/sections/${sectionId}/students/${row.id}`, { method: "DELETE" });
+      const data = await response.json();
+      setNotice(response.ok ? "Student deleted." : data.error || "Could not delete this student.");
+      if (response.ok) await load();
+    } catch { setNotice("Could not delete this student. Check the connection and try again."); }
+    finally { setBusy(false); }
+  }
+
+  function parsePaste() {
+    const lines = paste.trim().split(/\r?\n/).map(line => line.split("\t").length === 1 ? line.split(",") : line.split("\t"));
+    const first = lines[0].map(value => value.trim().toLowerCase());
+    const hasHeader = first.some(value => ["reg_no", "reg no", "registration no", "name", "student name", "parent mobile"].includes(value));
+    const data = hasHeader ? lines.slice(1) : lines;
+    setPreview(data.filter(cells => cells.some(value => value.trim())).map(cells => ({
+      regNo: cells[0]?.trim() || "", name: cells[1]?.trim() || "", parentMobile: cells[2]?.trim() || "",
+      studentMobile: cells[3]?.trim() || "", branch: cells[4]?.trim() || "", totalAttendancePct: cells[5]?.trim() || "",
+    })));
+  }
+
+  async function importPaste() {
+    if (!preview) return;
+    setBusy(true);
+    let added = 0;
+    let failed = 0;
+    for (const item of preview) {
+      try {
+        const response = await fetch(`/api/sections/${sectionId}/students`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...item, totalAttendancePct: item.totalAttendancePct ? Number(item.totalAttendancePct) : null }),
+        });
+        if (response.ok) added++; else failed++;
+      } catch { failed++; }
+    }
+    setNotice(`Imported ${added}; ${failed} rows failed validation or had duplicate registration numbers.`);
+    setPreview(null);
+    setPaste("");
+    await load();
+    setBusy(false);
+  }
+
+  async function importFile(file: File) {
+    setBusy(true);
+    try {
+      const ext = file.name.split(".").pop()?.toLowerCase();
+      const signature = new Uint8Array(await file.slice(0, 5).arrayBuffer());
+      if (signature[0] === 37 && signature[1] === 80 && signature[2] === 68 && signature[3] === 70 && signature[4] === 45) {
+        setNotice("This is a PDF. Use the detention-list upload above, or convert a student master PDF to Excel first."); return;
+      }
+      if (ext !== "csv" && ext !== "xlsx") { setNotice("Student import accepts CSV or XLSX files."); return; }
+      if (ext === "xlsx" && !(signature[0] === 80 && signature[1] === 75)) { setNotice("This file does not appear to be a valid XLSX workbook."); return; }
+      const body: Record<string, unknown> = { fileName: file.name, targetSectionId: sectionId, createSections: false };
+      if (ext === "csv") body.csv = await file.text();
+      else body.contentBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",")[1] ?? "");
+        reader.onerror = () => reject(new Error("Could not read file"));
+        reader.readAsDataURL(file);
+      });
+      const response = await fetch("/api/students/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const data = await response.json();
+      setNotice(data.message || data.error || "Import complete.");
+      if (response.ok) await load();
+    } catch { setNotice("Could not read this import file. Choose a valid CSV or XLSX file."); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <section className="section-students-panel">
+      <div className="section-roster-heading">
+        <div><span className="eyebrow">STUDENT ROSTER</span><h2>Students <span>{rows.length}</span></h2><p>{rows.filter(student => !student.parentMobile).length} missing parent mobile · {rows.filter(student => student.attendanceStatus === "Detained" || student.attendanceStatus.startsWith("Below 75%")).length} below threshold</p></div>
+        <a href="/students_template.csv" download className="section-template-link">Download student template ↓</a>
+      </div>
+
+      <form className="section-student-form" onSubmit={event => { event.preventDefault(); void save(); }}>
+        <label>Registration number<input required value={draft.regNo} onChange={event => setDraft({ ...draft, regNo: event.target.value })} placeholder="e.g. CS2401" /></label>
+        <label>Student name<input required value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} placeholder="Full name" /></label>
+        <label>Parent mobile<input value={draft.parentMobile} onChange={event => setDraft({ ...draft, parentMobile: event.target.value })} placeholder="Optional" /></label>
+        <label>Student mobile<input value={draft.studentMobile} onChange={event => setDraft({ ...draft, studentMobile: event.target.value })} placeholder="Optional" /></label>
+        <label>Branch<input value={draft.branch} onChange={event => setDraft({ ...draft, branch: event.target.value })} placeholder="e.g. Computer Science" /></label>
+        <label>Attendance %<input type="number" min="0" max="100" step="0.01" value={draft.totalAttendancePct} onChange={event => setDraft({ ...draft, totalAttendancePct: event.target.value })} placeholder="Optional" /></label>
+        <div className="section-form-actions"><button type="submit" className="section-action-primary" disabled={busy}>{busy ? "Saving…" : editing ? "Update student" : "Add student"}</button>{editing && <button type="button" className="section-action-secondary" onClick={() => { setEditing(""); setDraft(blank); }}>Cancel edit</button>}</div>
+      </form>
+
+      <div className="section-import-grid">
+        <section className="section-import-card"><div><h3>Import a student file</h3><p>Upload a CSV or XLSX list assigned to Section {sectionId}.</p></div><label className="section-file-picker"><input type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={busy} onChange={event => { const file = event.target.files?.[0]; if (file) void importFile(file); }} /><span>Choose CSV or XLSX</span><small>Files are validated before saving.</small></label></section>
+        <section className="section-import-card"><div><h3>Paste rows from Excel</h3><p>Columns: registration, name, parent mobile, student mobile, branch, attendance.</p></div><textarea value={paste} onChange={event => setPaste(event.target.value)} placeholder="Paste tab-separated cells here" rows={3} /><div className="section-import-actions"><button type="button" className="section-action-secondary" onClick={parsePaste} disabled={!paste.trim()}>Preview pasted rows</button>{preview && <button type="button" className="section-action-primary" onClick={() => void importPaste()} disabled={busy}>Import {preview.length} rows</button>}</div>{preview && <p className="section-preview-note">Preview: {preview.slice(0, 5).map(row => `${row.regNo} · ${row.name}`).join(" / ")}{preview.length > 5 ? ` · +${preview.length - 5} more` : ""}</p>}</section>
+      </div>
+
+      <div className="section-roster-tools"><input aria-label="Search students" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search by name or registration" /><label><input type="checkbox" checked={missing} onChange={event => setMissing(event.target.checked)} /> Parent mobile missing</label><select aria-label="Sort students" value={sort} onChange={event => setSort(event.target.value as "regNo" | "name")}><option value="regNo">Sort by registration</option><option value="name">Sort by name</option></select><span>Showing {visible.length} of {rows.length}</span></div>
+        <div className="section-student-table-wrap"><table className="section-student-table"><thead><tr><th>Registration</th><th>Student</th><th>Parent mobile</th><th>Attendance</th><th>Status and subjects</th><th>Actions</th></tr></thead><tbody>{visible.map(student => {const subjects=parseDetainedSubjects(student.detainedSubjects);return <tr key={student.id}><td className="section-reg-cell">{student.regNo}</td><td className="section-name-cell">{student.name}</td><td>{student.parentMobile || <span className="missing-pill">Missing</span>}</td><td>{student.effectiveAttendance===null?"—":`${student.effectiveAttendance}%`} {student.attendanceSourceLabel&&<small className="attendance-source-tag">{student.attendanceSourceLabel}</small>}</td><td><span className={student.attendanceStatus==="Detained"||student.attendanceStatus.startsWith("Below 75%")?"detained-pill":"ok-pill"}>{student.attendanceStatus}</span>{student.attendanceSource==="LIST"&&subjects.map(subject=><span className="subject-code-name" key={subject.code}>{subject.code} · {subject.name}</span>)}</td><td><div className="section-row-actions"><button type="button" onClick={() => { setEditing(student.id); setDraft({ regNo: student.regNo, name: student.name, parentMobile: student.parentMobile, studentMobile: student.studentMobile || "", branch: student.branch || "", totalAttendancePct: student.totalAttendancePct?.toString() || "" }); }}>Edit</button><button type="button" disabled={busy} onClick={() => void remove(student)}>Delete</button></div></td></tr>})}{visible.length === 0 && <tr><td colSpan={6} className="section-roster-empty">No students match this view.</td></tr>}</tbody></table></div>
+      {notice && <p role="status" className="section-roster-notice">{notice}</p>}
+    </section>
+  );
 }
