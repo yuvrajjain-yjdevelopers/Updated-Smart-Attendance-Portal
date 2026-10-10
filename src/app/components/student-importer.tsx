@@ -20,12 +20,13 @@ export default function StudentImporter() {
       if(ext==="csv")body.csv=await file.text();
       else body.contentBase64=(await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(",")[1]??"");reader.onerror=()=>reject(new Error("Could not read file"));reader.readAsDataURL(file);}));
       if(useMapping)body.mapping=mapping;
-      const response=await fetch("/api/students/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});const data=await response.json();
+      const response=await fetch("/api/students/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});const data=await response.json().catch(()=>null);
+      if(!data)throw new Error(`Import server returned an unreadable response (HTTP ${response.status}). Check the server logs.`);
       setNotice(data.message||data.error||"Import complete");
       if(data.mappingNeeded){setMappingData(data);setMapping(data.mapping??{});}
       else setMappingData(null);
       setGroups(data.groups??[]);setReport(data.reportCsv??"");if(response.ok)window.location.reload();
-    } catch {setNotice("Could not read this file. Please choose a valid CSV or XLSX file.");} finally {setBusy(false);}
+    } catch (error) {setNotice(error instanceof Error?error.message:"Import failed. Check the connection and try again.");} finally {setBusy(false);}
   }
   function downloadReport(){if(!report)return;const url=URL.createObjectURL(new Blob([report],{type:"text/csv;charset=utf-8"}));const a=document.createElement("a");a.href=url;a.download="student-import-errors.csv";a.click();URL.revokeObjectURL(url);}
   return <section className="student-importer">

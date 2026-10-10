@@ -4,7 +4,6 @@ import ExcelJS from "exceljs";
 import { z } from "zod";
 import { currentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { regeneratePreparedMessages } from "@/lib/preparedMessages";
 import { validateStudentRows,errorReportCsv } from "@/lib/studentImport";
 export const dynamic = "force-dynamic";
 
@@ -43,8 +42,44 @@ export async function POST(request:Request) {
   if(missingNames.length&&!createSections)return NextResponse.json({error:`Create these sections first: ${missingNames.join(", ")}`},{status:400});
   await db.$transaction(async tx=>{
     for(const name of missingNames){const section=await tx.section.create({data:{name}});currentSections.set(name.toLowerCase(),section);}
-    for(const row of checked.records){const section=currentSections.get(row.section.toLowerCase())!;const attendance=row.totalAttendancePct;await tx.student.upsert({where:{regNo:row.regNo},update:{name:row.name,sectionId:section.id,parentMobile:row.parentMobile,studentMobile:row.studentMobile,branch:row.branch,totalAttendancePct:attendance},create:{regNo:row.regNo,name:row.name,sectionId:section.id,parentMobile:row.parentMobile,studentMobile:row.studentMobile,branch:row.branch,totalAttendancePct:attendance}});}
-  });
-  await regeneratePreparedMessages();
+
+    // Read existing registrations once, then bulk-insert new students. The old
+    // per-row upsert loop kept an interactive transaction open for thousands
+    // of network round trips and commonly expired on hosted PostgreSQL.
+    const existing=await tx.student.findMany({
+      where:{regNo:{in:checked.records.map(row=>row.regNo)}},
+      select:{regNo:true},
+    });
+    const existingRegs=new Set(existing.map(student=>student.regNo));
+    const newStudents=checked.records
+      .filter(row=>!existingRegs.has(row.regNo))
+      .map(row=>({
+        regNo:row.regNo,
+        name:row.name,
+        sectionId:currentSections.get(row.section.toLowerCase())!.id,
+        parentMobile:row.parentMobile,
+        studentMobile:row.studentMobile,
+        branch:row.branch,
+        totalAttendancePct:row.totalAttendancePct,
+      }));
+    if(newStudents.length) await tx.student.createMany({data:newStudents});
+
+    // Preserve the existing import behavior: re-importing a registration
+    // updates that student's details and section assignment.
+    for(const row of checked.records){
+      if(!existingRegs.has(row.regNo)) continue;
+      await tx.student.update({where:{regNo:row.regNo},data:{
+        name:row.name,
+        sectionId:currentSections.get(row.section.toLowerCase())!.id,
+        parentMobile:row.parentMobile,
+        studentMobile:row.studentMobile,
+        branch:row.branch,
+        totalAttendancePct:row.totalAttendancePct,
+      }});
+    }
+  },{maxWait:10_000,timeout:30_000});
+  // Prepared messages refresh on demand when a sender opens the dashboard,
+  // section, or prepared-message API. Keeping that work out of this request
+  // lets large roster imports finish within serverless function limits.
   return NextResponse.json({imported:checked.records.length,message:`Imported ${checked.records.length} student rows`});
 }

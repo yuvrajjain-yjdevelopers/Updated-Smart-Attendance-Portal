@@ -36,17 +36,23 @@ export function validateStudentRows(rows: Record<string,string>[], headers: stri
   if (mapped.missing.length) return { mappingNeeded: true as const, found: headers, missing: mapped.missing, mapping: mapped.mapping };
   const records: Array<{regNo:string;name:string;section:string;parentMobile:string;studentMobile:string|null;branch:string|null;totalAttendancePct:number|null}> = [];
   const errors: ImportError[] = [];
+  const seenRegNos = new Set<string>();
   rows.forEach((raw,index)=>{
     const get=(field:string)=>(raw[mapped.mapping[field]]??"").trim();
     const values=Object.fromEntries(Object.entries(raw).map(([key,value])=>[key,String(value??"")]));
     const regNo=get("reg_no");const name=get("name");const section=get("section");
     if(!regNo||!name||!section){errors.push({row:index+2,type:"Missing required value",message:"Registration number, student name, and section are required",values});return;}
     if(regNo.length>100){errors.push({row:index+2,type:"Invalid registration number",message:"Registration number is longer than 100 characters",values});return;}
+    const normalizedRegNo=regNo.toUpperCase();
+    if(seenRegNos.has(normalizedRegNo)){errors.push({row:index+2,type:"Duplicate registration number",message:`Registration number ${normalizedRegNo} appears more than once in this file`,values});return;}
     const pctText=get("total_attendance_pct");const parsedPct=pctText?Number(pctText.replace("%","")):null;const pct=pctText.includes("%")?parsedPct:attendanceAsPercent(parsedPct);
     if(pctText&&(pct===null||!Number.isFinite(pct)||pct<0||pct>100)){errors.push({row:index+2,type:"Invalid attendance",message:"Attendance must be a number from 0 to 100",values});return;}
     try {
       const parent=get("parent_mobile");const student=get("student_mobile");
-      records.push({regNo:regNo.toUpperCase(),name,section, parentMobile:parent?normalizeIndianMobile(parent):"", studentMobile:student?normalizeIndianMobile(student):null, branch:get("branch")||null,totalAttendancePct:pct});
+      const parentMobile=parent?normalizeIndianMobile(parent):"";
+      const studentMobile=student?normalizeIndianMobile(student):null;
+      seenRegNos.add(normalizedRegNo);
+      records.push({regNo:normalizedRegNo,name,section,parentMobile,studentMobile,branch:get("branch")||null,totalAttendancePct:pct});
     } catch (error) {const reason=error instanceof Error?error.message:"Invalid mobile number";const type=reason.includes("scientific")?"Spreadsheet damaged mobile":"Invalid mobile number";errors.push({row:index+2,type,message:reason,values});}
   });
   return { mappingNeeded:false as const, mapping:mapped.mapping, records, errors, groups:groupImportErrors(errors) };

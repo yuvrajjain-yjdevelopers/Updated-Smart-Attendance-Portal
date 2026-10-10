@@ -152,10 +152,11 @@ export default function SectionStudents({ sectionId }: { sectionId: string }) {
         reader.readAsDataURL(file);
       });
       const response = await fetch("/api/students/import", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-      const data = await response.json();
+      const data = await response.json().catch(() => null);
+      if (!data) throw new Error(`Import server returned an unreadable response (HTTP ${response.status}). Check the server logs.`);
       setNotice(data.message || data.error || "Import complete.");
       if (response.ok) await load();
-    } catch { setNotice("Could not read this import file. Choose a valid CSV or XLSX file."); }
+    } catch (error) { setNotice(error instanceof Error ? error.message : "Import failed. Check the connection and try again."); }
     finally { setBusy(false); }
   }
 
