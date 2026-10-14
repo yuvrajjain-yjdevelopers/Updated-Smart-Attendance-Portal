@@ -1,9 +1,8 @@
 import { db } from "@/lib/db";
-import { DEFAULT_SMS_TEMPLATE, DEFAULT_WHATSAPP_TEMPLATE, renderTemplate } from "@/lib/messageTemplates";
+import { getSmsMetrics, getTrilingualSmsTemplate, getTrilingualWhatsAppTemplate, normalizeSmsText, renderTemplate, toAsciiSms } from "@/lib/messageTemplates";
 import { normalizeIndianMobile } from "@/lib/phone";
 import { parseDetainedSubjects } from "@/lib/detentionSubjects";
 import { DEFAULT_ATTENDANCE_THRESHOLD, formatAttendance, getEffectiveAttendance, getStatus } from "@/lib/attendance";
-import { toAsciiSms } from "@/lib/messageTemplates";
 
 export function normalizePreparedNumber(value: string): string | null {
   try { return `91${normalizeIndianMobile(value)}`; } catch { return null; }
@@ -21,14 +20,16 @@ export function buildPreparedText(input: { template: string; studentName: string
   const finalText = `${input.testMode ? `[TEST for ${input.studentName}] ` : ""}${withoutEmptySubjects}`.replace(/\n{3,}/g, "\n\n").trim();
   if (input.channel !== "SMS") return finalText;
 
-  const asciiText = toAsciiSms(finalText);
-  if (asciiText.length <= 306) return asciiText;
+  const smsText = normalizeSmsText(finalText);
+  if (getSmsMetrics(smsText).parts <= 2) return smsText;
+  // Preserve localized text and let the Send Center prevent an over-limit SMS.
+  if (getSmsMetrics(smsText).encoding === "Unicode") return smsText;
 
   // Existing installations may have an older, verbose template saved in Settings.
   // Preserve its key data, but keep generated SMS within the supported two-part limit.
   const testPrefix = input.testMode ? `[TEST for ${input.studentName}] ` : "";
   const intro = `Dear Parent, ${input.studentName} (Reg ${input.regNo}) has ${formatAttendance(input.avg) ?? ""}% attendance, below 75%.`;
-  const ending = ` Contact ${input.senderName}. -${input.collegeName}`;
+  const ending = ` Contact ${input.senderName} (${input.senderMobile}). -${input.collegeName}`;
   const subjectText = input.subjects.join(", ");
   const available = Math.max(0, 306 - testPrefix.length - intro.length - ending.length - (subjectText ? " Detained: .".length + 3 : 0));
   const detail = subjectText ? ` Detained: ${subjectText.slice(0, available)}${subjectText.length > available ? "..." : ""}.` : "";
@@ -53,7 +54,7 @@ export async function regeneratePreparedMessages(sectionId?: string, senderOnlyI
     for (const sender of senders) {
       if (sender.role === "TEACHER" && sender.sectionId !== student.sectionId) continue;
       for (const channel of ["SMS", "WHATSAPP"] as const) {
-        const template = channel === "SMS" ? settings.smsTemplate || DEFAULT_SMS_TEMPLATE : settings.whatsappTemplate || DEFAULT_WHATSAPP_TEMPLATE;
+        const template = channel === "SMS" ? getTrilingualSmsTemplate(settings) : getTrilingualWhatsAppTemplate(settings);
         const text = buildPreparedText({ template, studentName: student.name, regNo: student.regNo, section: student.section.name, avg: effective.pct, subjects, date: listDate, senderName: sender.name, senderMobile: sender.mobile || "", collegeName: settings.collegeName || "College", department: settings.department || "Department", testMode: settings.testMode !== "false", channel });
         const key = { studentId_senderId_channel: { studentId: student.id, senderId: sender.id, channel } };
         const previous = await db.preparedMessage.findUnique({ where: key, select: { status: true } });

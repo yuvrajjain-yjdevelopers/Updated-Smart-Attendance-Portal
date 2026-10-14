@@ -14,6 +14,7 @@ import {
 import { PageHeader } from "@/app/components/ui";
 import { buildSmsUrl, buildWhatsAppUrl } from "@/lib/sendCenter";
 import { normalizeIndianMobile } from "@/lib/phone";
+import { DEFAULT_TRILINGUAL_SMS_TEMPLATE, DEFAULT_TRILINGUAL_WHATSAPP_TEMPLATE, getSmsMetrics, MAX_SMS_PARTS } from "@/lib/messageTemplates";
 
 type Gateway = {
   configured: boolean;
@@ -38,8 +39,8 @@ const initialCollege: CollegeSettings = {
   testNumber: "",
   collegeName: "",
   department: "",
-  smsTemplate: "",
-  whatsappTemplate: "",
+  smsTemplate: DEFAULT_TRILINGUAL_SMS_TEMPLATE,
+  whatsappTemplate: DEFAULT_TRILINGUAL_WHATSAPP_TEMPLATE,
 };
 
 export default function SettingsClient({
@@ -90,8 +91,8 @@ export default function SettingsClient({
     if (role === "HOD") {
       void fetch("/api/settings")
         .then((response) => response.json())
-        .then((value: CollegeSettings) => {
-          if (active) setCollege(value);
+        .then((value: Partial<CollegeSettings>) => {
+          if (active) setCollege({ ...initialCollege, ...value });
         })
         .catch(() => {
           if (active) setNotice("Could not load portal messaging settings.");
@@ -169,8 +170,7 @@ export default function SettingsClient({
     }
   }
 
-  const smsAscii = Array.from(college.smsTemplate).every((character) => character.charCodeAt(0) <= 127);
-  const smsParts = college.smsTemplate.length <= 160 ? 1 : Math.ceil(college.smsTemplate.length / 153);
+  const smsMetrics = getSmsMetrics(college.smsTemplate);
   const statusOkay = notice.includes("saved") || notice.includes("succeeded") || notice.includes("successfully");
 
   return (
@@ -193,9 +193,10 @@ export default function SettingsClient({
             <label className="settings-field"><span>Test phone number</span><input inputMode="tel" value={college.testNumber} onChange={(event) => setCollege({ ...college, testNumber: event.target.value })} /></label>
             <label className="settings-toggle"><input type="checkbox" checked={college.testMode} onChange={(event) => setCollege({ ...college, testMode: event.target.checked })} /><span><b>Test mode</b><small>All messages go to the test phone number above.</small></span></label>
           </div>
+          <p className="settings-template-language-note">Every message includes the complete English message first, then the complete Hindi message, then the complete Marathi message. Add or edit wording here; the SMS is divided into message parts by your phone network.</p>
           <div className="settings-template-grid">
-            <label className="settings-field"><span>SMS template</span><textarea rows={6} value={college.smsTemplate} onChange={(event) => setCollege({ ...college, smsTemplate: event.target.value })} /><small className={`template-counter ${college.smsTemplate.length > 306 || !smsAscii ? "counter-warning" : ""}`}>{college.smsTemplate.length}/306 characters · {smsParts} SMS part{smsParts === 1 ? "" : "s"} · up to 2 parts · {smsAscii ? "ASCII" : "Use ASCII characters only"}</small></label>
-            <label className="settings-field"><span>WhatsApp template</span><textarea rows={8} value={college.whatsappTemplate} onChange={(event) => setCollege({ ...college, whatsappTemplate: event.target.value })} /><small className="template-help">Available placeholders: <code>{"{student_name}"}</code>, <code>{"{reg_no}"}</code>, <code>{"{section}"}</code>, <code>{"{avg}"}</code>, <code>{"{subjects}"}</code>, <code>{"{sender_name}"}</code>, <code>{"{sender_mobile}"}</code>.</small></label>
+            <label className="settings-field"><span>SMS template · English + हिन्दी + मराठी</span><textarea rows={6} value={college.smsTemplate} onChange={(event) => setCollege({ ...college, smsTemplate: event.target.value })} /><small className={`template-counter ${smsMetrics.parts > MAX_SMS_PARTS ? "counter-warning" : ""}`}>{smsMetrics.characters} {smsMetrics.encoding} units · {smsMetrics.parts} SMS part{smsMetrics.parts === 1 ? "" : "s"} · maximum {MAX_SMS_PARTS} parts</small></label>
+            <label className="settings-field"><span>WhatsApp template · English + हिन्दी + मराठी</span><textarea rows={8} value={college.whatsappTemplate} onChange={(event) => setCollege({ ...college, whatsappTemplate: event.target.value })} /><small className="template-help">Add extra wording in any of the three languages. Placeholders: <code>{"{student_name}"}</code>, <code>{"{reg_no}"}</code>, <code>{"{section}"}</code>, <code>{"{avg}"}</code>, <code>{"{subjects}"}</code>, <code>{"{sender_name}"}</code>, <code>{"{sender_mobile}"}</code>, <code>{"{college_name}"}</code>, <code>{"{department}"}</code>. Conditional subjects: <code>{"{?subjects}...{/subjects}"}</code>.</small></label>
           </div>
           <div className="settings-card-actions"><button className="settings-primary-button" onClick={() => void saveCollege()}><Save size={16} />Save messaging settings</button></div>
         </section>
