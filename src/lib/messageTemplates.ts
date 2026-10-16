@@ -71,8 +71,16 @@ export function getSmsMetrics(text: string): SmsMetrics {
 }
 
 export function renderTemplate(template: string, values: Record<string, string | number | null | undefined>) {
-  const conditional = template.replace(/\{\?([a-z_]+)\}([\s\S]*?)\{\/\1\}/gi, (_, key: string, content: string) => values[key] !== null && values[key] !== undefined && String(values[key]).trim() !== "" && String(values[key]) !== "0" ? content : "");
-  return conditional.replace(/\{([a-z_]+)\}/gi, (_, key: string) => {
+  return compileTemplate(template)(values);
+}
+
+export function compileTemplate(template: string) {
+  const conditionalPattern = /\{\?([a-z_]+)\}([\s\S]*?)\{\/\1\}/gi;
+  const placeholderPattern = /\{([a-z_]+)\}/gi;
+  return (values: Record<string, string | number | null | undefined>) => template.replace(conditionalPattern, (_whole, key: string, content: string) => {
+    const value = values[key];
+    return value !== null && value !== undefined && String(value).trim() !== "" && String(value) !== "0" ? content : "";
+  }).replace(placeholderPattern, (_whole, key: string) => {
     const value = values[key];
     if (value === null || value === undefined || (typeof value === "number" && !Number.isFinite(value))) return "";
     const rendered = String(value);

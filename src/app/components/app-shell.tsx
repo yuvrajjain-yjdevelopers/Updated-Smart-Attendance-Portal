@@ -37,11 +37,12 @@ export function TopBar({ title, testMode, menuOpen, onOpenMenu, onLogout }: { ti
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   const router = useRouter();
+  const isLoginPage = path === "/login";
   const [user, setUser] = useState<User | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
 
   useEffect(() => {
-    if (path === "/login") return;
+    if (isLoginPage) return;
     const controller = new AbortController();
     fetch("/api/auth/me", { signal: controller.signal }).then(response => response.ok ? response.json() : null).then(data => {
       if (!controller.signal.aborted) {
@@ -50,7 +51,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       }
     }).catch(() => { if (!controller.signal.aborted) router.replace("/login"); });
     return () => controller.abort();
-  }, [path, router]);
+  }, [isLoginPage, router]);
 
   useEffect(() => {
     if (!menuOpen) return;

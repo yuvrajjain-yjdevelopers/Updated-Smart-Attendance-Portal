@@ -39,6 +39,34 @@ enum MessageStatus {
   SENT_BY_USER
 }
 
+enum ConnectionKind {
+  WHATSAPP_WEB
+  MOBILE_LINK
+}
+
+enum MobileLinkMode {
+  SMS_LINK
+  GOOGLE_MESSAGES
+  PHONE
+}
+
+enum SendSessionStatus {
+  PREPARED
+  IN_PROGRESS
+  PAUSED_SETUP
+  COMPLETED
+  CANCELLED
+}
+
+enum SendSessionItemStatus {
+  PENDING
+  OPENED
+  SENT_BY_USER
+  SKIPPED
+  FAILED
+  EXCLUDED
+}
+
 model User {
   id                             String          @id @default(cuid())
   username                       String          @unique
@@ -48,6 +76,7 @@ model User {
   sectionId                      String?
   section                        Section?        @relation(fields: [sectionId], references: [id], onDelete: SetNull)
   canSend                        Boolean         @default(true)
+  mobileLinkMode                 MobileLinkMode  @default(SMS_LINK)
   active                         Boolean         @default(true)
   mobile                         String?
   smsGatewayMode                 SmsGatewayMode?
@@ -61,6 +90,8 @@ model User {
   lastLoginAt                    DateTime?
   preparedMessages              PreparedMessage[]
   batches                        MessageBatch[]
+  sendSessions                   SendSession[]
+  messagingConnections           MessagingConnection[]
   createdAt                      DateTime        @default(now())
 }
 
@@ -70,6 +101,7 @@ model Section {
   users     User[]
   students  Student[]
   batches   MessageBatch[]
+  sendSessions SendSession[]
   uploads   DetentionUpload[]
   createdAt DateTime          @default(now())
 }
@@ -92,7 +124,12 @@ model Student {
   updatedAt          DateTime         @default(now()) @updatedAt
   preparedMessages   PreparedMessage[]
   logs               MessageLog[]
+  sendSessionItems  SendSessionItem[]
   entries            DetentionEntry[]
+
+  @@index([sectionId, regNo])
+  @@index([sectionId, avgAtt, lastListDate])
+  @@index([sectionId, totalAttendancePct])
 }
 
 model DetentionUpload {
@@ -146,7 +183,9 @@ model PreparedMessage {
   status    PreparedStatus @default(READY)
   toNumber  String?
   text      String
+  sourceFingerprint String?
   listDate  DateTime?
+  sessionItems SendSessionItem[]
   updatedAt DateTime       @updatedAt
   @@unique([studentId, senderId, channel])
   @@index([senderId, status])
@@ -167,7 +206,56 @@ model MessageLog {
   listDate   DateTime?
   toNumber   String
   text       String
+  sessionItem SendSessionItem?
   createdAt  DateTime       @default(now())
+}
+
+model MessagingConnection {
+  id          String         @id @default(cuid())
+  userId      String
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind        ConnectionKind
+  confirmedAt DateTime?
+  updatedAt   DateTime       @updatedAt
+
+  @@unique([userId, kind])
+}
+
+model SendSession {
+  id           String            @id @default(cuid())
+  userId       String
+  user         User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel      MessageChannel
+  mobileLinkMode MobileLinkMode @default(SMS_LINK)
+  sectionId    String
+  section      Section           @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  activeKey    String?           @unique
+  status       SendSessionStatus @default(PREPARED)
+  currentIndex Int               @default(0)
+  testMode     Boolean           @default(false)
+  items        SendSessionItem[]
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([userId, channel, status])
+}
+
+model SendSessionItem {
+  id                 String                @id @default(cuid())
+  sessionId          String
+  session            SendSession           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  studentId          String
+  student            Student               @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  preparedMessageId  String?
+  preparedMessage    PreparedMessage?      @relation(fields: [preparedMessageId], references: [id], onDelete: SetNull)
+  messageLogId       String?               @unique
+  messageLog         MessageLog?            @relation(fields: [messageLogId], references: [id], onDelete: SetNull)
+  status             SendSessionItemStatus @default(PENDING)
+  order              Int
+  updatedAt          DateTime              @updatedAt
+
+  @@unique([sessionId, order])
+  @@index([sessionId, status])
 }
 
 model Setting {

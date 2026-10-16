@@ -12,7 +12,7 @@ import {
   UserRound,
 } from "lucide-react";
 import { PageHeader } from "@/app/components/ui";
-import { buildSmsUrl, buildWhatsAppUrl } from "@/lib/sendCenter";
+import { buildSmsUrl, buildWhatsAppUrl, GOOGLE_MESSAGES_URL } from "@/lib/sendCenter";
 import { normalizeIndianMobile } from "@/lib/phone";
 import { DEFAULT_TRILINGUAL_SMS_TEMPLATE, DEFAULT_TRILINGUAL_WHATSAPP_TEMPLATE, getSmsMetrics, MAX_SMS_PARTS } from "@/lib/messageTemplates";
 
@@ -33,6 +33,7 @@ type CollegeSettings = {
   smsTemplate: string;
   whatsappTemplate: string;
 };
+type Connection = { kind: "WHATSAPP_WEB" | "MOBILE_LINK"; confirmed: boolean; confirmedAt: string | null; label: string };
 
 const initialCollege: CollegeSettings = {
   testMode: true,
@@ -68,10 +69,13 @@ export default function SettingsClient({
   const [whatsAppTested, setWhatsAppTested] = useState(false);
   const [preparedCount, setPreparedCount] = useState(0);
   const [validPreparedCount, setValidPreparedCount] = useState(0);
+  const [connections, setConnections] = useState<Connection[]>([]);
+  const [mobileLinkMode, setMobileLinkMode] = useState("sms-link");
 
   useEffect(() => {
     queueMicrotask(()=>setSmsLinkTested(localStorage.getItem("attendance-sms-link-tested")==="yes"));
     queueMicrotask(()=>setWhatsAppTested(localStorage.getItem("attendance-wa-link-tested")==="yes"));
+    void fetch("/api/settings/connections").then(response=>response.json()).then(data=>{setConnections(data.connections||[]);setMobileLinkMode(data.mobileLinkMode==="GOOGLE_MESSAGES"?"google-messages":data.mobileLinkMode==="PHONE"?"phone":"sms-link")}).catch(()=>{});
     void fetch("/api/messages/prepared").then(r=>r.json()).then(d=>{setPreparedCount((d.messages||[]).filter((m:{status:string})=>m.status==="READY").length);setValidPreparedCount((d.messages||[]).filter((m:{status:string;toNumber:string|null})=>m.status==="READY"&&!!m.toNumber).length)}).catch(()=>{});
     let active = true;
     void fetch("/api/settings/gateway")
@@ -170,6 +174,30 @@ export default function SettingsClient({
     }
   }
 
+  async function updateConnection(kind: Connection["kind"], action: "CONFIRM" | "NOT_WORKING") {
+    const response = await fetch("/api/settings/connections", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind, action }) });
+    const data = await response.json();
+    if (!response.ok) { setNotice(data.error || "Could not save connection status."); return; }
+    setConnections(current => current.map(connection => connection.kind === kind ? { ...connection, confirmed: data.confirmed, confirmedAt: data.confirmedAt, label: data.confirmed ? "Confirmed by you" : "Not confirmed" } : connection));
+    setNotice(data.confirmed ? "Connection confirmed by you for 12 hours." : "Connection marked as not working.");
+  }
+
+  async function saveMobileLinkMode(value: string) {
+    setMobileLinkMode(value);
+    const mode = value === "google-messages" ? "GOOGLE_MESSAGES" : value === "phone" ? "PHONE" : "SMS_LINK";
+    const response = await fetch("/api/settings/connections", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "MOBILE_LINK", action: "SET_MODE", mode }) });
+    const data = await response.json();
+    setNotice(data.error || "Mobile link mode saved.");
+  }
+
+  function openWhatsAppSetup() { window.open("https://web.whatsapp.com", "attendance_messaging_window", "popup,width=1100,height=800"); }
+
+  function openSmsTest() {
+    if (mobileLinkMode === "google-messages") { window.open(GOOGLE_MESSAGES_URL, "attendance_messaging_window"); return; }
+    try { const number = normalizeIndianMobile(mobile || testPhone); window.open(buildSmsUrl(number, "Smart Attendance SMS link test"), "attendance_messaging_window"); }
+    catch { setNotice("Add your mobile number in Settings before testing the SMS link."); }
+  }
+
   const smsMetrics = getSmsMetrics(college.smsTemplate);
   const statusOkay = notice.includes("saved") || notice.includes("succeeded") || notice.includes("successfully");
 
@@ -202,9 +230,18 @@ export default function SettingsClient({
         </section>
       )}
 
+      <section className="settings-card settings-connections-card" aria-labelledby="connections-title">
+        <div className="settings-card-heading"><span className="settings-card-icon blue-icon"><ShieldCheck size={18} /></span><div><h2 id="connections-title">Connections</h2><p>Confirm that your browser or messaging app is ready. Confirmation expires after 12 hours.</p></div></div>
+        <div className="connection-status-list">{(["WHATSAPP_WEB", "MOBILE_LINK"] as const).map(kind => {
+          const connection = connections.find(item => item.kind === kind);
+          const label = kind === "WHATSAPP_WEB" ? "WhatsApp Web" : "Mobile link";
+          return <article key={kind} className="connection-status-item"><div><b>{label}</b><span className={connection?.confirmed ? "connection-confirmed" : "connection-unconfirmed"}>{connection?.confirmed ? `Confirmed by you at ${connection.confirmedAt ? new Date(connection.confirmedAt).toLocaleString() : "recently"}` : "Not confirmed"}</span>{kind === "MOBILE_LINK" && <><label className="connection-mode-field">Mode<select value={mobileLinkMode} onChange={event=>void saveMobileLinkMode(event.target.value)}><option value="sms-link">SMS link handler</option><option value="google-messages">Google Messages for web</option><option value="phone">Phone Link / phone app</option></select></label></>}</div><div className="connection-actions">{kind === "WHATSAPP_WEB" ? <button className="settings-secondary-button" onClick={openWhatsAppSetup}>Open WhatsApp Web</button> : <button className="settings-secondary-button" onClick={openSmsTest}>Test my SMS link</button>}{connection?.confirmed ? <button className="settings-secondary-button" onClick={() => void updateConnection(kind, "NOT_WORKING")}>Mark as not working</button> : <button className="settings-primary-button" onClick={() => void updateConnection(kind, "CONFIRM")}>Mark as working</button>}</div></article>;
+        })}</div>
+      </section>
+
       <section className="settings-card" aria-labelledby="demo-checklist-title">
         <div className="settings-card-heading"><span className="settings-card-icon"><CheckCircle2 size={18} /></span><div><h2 id="demo-checklist-title">Demo checklist</h2><p>Verify your browser and a test message before a live workflow.</p></div></div>
-        <div className="settings-card-actions"><button className="settings-secondary-button" onClick={()=>{try{const phone=normalizeIndianMobile(testPhone||mobile);window.open(buildSmsUrl(phone,"Smart Attendance SMS link test"),"attendance_sms_test");const ok=window.confirm("Did a messaging app open with the number and text filled in?");setSmsLinkTested(ok);localStorage.setItem("attendance-sms-link-tested",ok?"yes":"no");localStorage.setItem("attendance-sms-mode",ok?"sms-link":"google-messages")}catch{setNotice("Enter a valid test phone number first.")}}}>Test my computer&apos;s SMS link</button><button className="settings-secondary-button" onClick={()=>{try{const phone=normalizeIndianMobile(testPhone||mobile);window.open(buildWhatsAppUrl(phone,"Smart Attendance WhatsApp link test","desktop"),"wa_sender","popup,width=1000,height=750");const ok=window.confirm("Did WhatsApp Web open with the number and test text?");setWhatsAppTested(ok);localStorage.setItem("attendance-wa-link-tested",ok?"yes":"no")}catch{setNotice("Enter a valid test phone number first.")}}}>Test WhatsApp Web link</button></div>
+        <div className="settings-card-actions"><button className="settings-secondary-button" onClick={()=>{try{const phone=normalizeIndianMobile(testPhone||mobile);window.open(buildSmsUrl(phone,"Smart Attendance SMS link test"),"attendance_sms_test");const ok=window.confirm("Did a messaging app open with the number and text filled in?");setSmsLinkTested(ok);localStorage.setItem("attendance-sms-link-tested",ok?"yes":"no");}catch{setNotice("Enter a valid test phone number first.")}}}>Test my computer&apos;s SMS link</button><button className="settings-secondary-button" onClick={()=>{try{const phone=normalizeIndianMobile(testPhone||mobile);window.open(buildWhatsAppUrl(phone,"Smart Attendance WhatsApp link test","desktop"),"wa_sender","popup,width=1000,height=750");const ok=window.confirm("Did WhatsApp Web open with the number and test text?");setWhatsAppTested(ok);localStorage.setItem("attendance-wa-link-tested",ok?"yes":"no")}catch{setNotice("Enter a valid test phone number first.")}}}>Test WhatsApp Web link</button></div>
         <ul className="settings-checklist"><li>{college.testMode?"✓ Test mode is on":"✓ Test mode is off"}</li><li>{whatsAppTested?"✓ WhatsApp Web link tested":"○ WhatsApp Web link not tested"}</li><li>{smsLinkTested?"✓ SMS link tested":"○ SMS link not tested"}</li><li>{validPreparedCount?"✓ Detained student has a valid parent number":"○ No valid detained-student number"}</li><li>{preparedCount?"✓ Messages prepared":"○ No prepared messages yet"}</li></ul>
       </section>
       <details className="settings-card settings-phone-card settings-advanced"><summary>Advanced · Android SMS Gateway (optional)</summary><p>This optional integration is not required for the Send Center, which uses your own browser/device messaging apps.</p><section id="phone-setup" aria-labelledby="phone-setup-title">

@@ -4,23 +4,24 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 import { ArrowUpRight,GraduationCap,Layers3,MessageSquareText,UserRoundCheck } from "lucide-react";
 import { Button, Card, PageHeader, StatCard } from "@/app/components/ui";
-import { ensurePreparedForSender } from "@/lib/preparedMessages";
-import { DEFAULT_ATTENDANCE_THRESHOLD, getStatus } from "@/lib/attendance";
+import { DEFAULT_ATTENDANCE_THRESHOLD } from "@/lib/attendance";
+import UnfinishedSendBanner from "@/app/components/unfinished-send-banner";
 export const dynamic="force-dynamic";
 export default async function Dashboard() {
   const user = await currentUser();
   if (!user) redirect("/login");
   if (user.role !== "HOD") redirect("/my-class");
 
-  await ensurePreparedForSender(user.id);
-  const [studentRows, sections, messages, ready] = await Promise.all([
-    db.student.findMany({ select: { avgAtt: true, totalAttendancePct: true, lastListDate: true, isDetained: true, lowSubjectCount: true } }),
+  const [students, detained, sections, messages, ready] = await Promise.all([
+    db.student.count(),
+    db.student.count({ where: { OR: [
+      { avgAtt: { lt: DEFAULT_ATTENDANCE_THRESHOLD }, lastListDate: { not: null } },
+      { totalAttendancePct: { lt: DEFAULT_ATTENDANCE_THRESHOLD }, OR: [{ avgAtt: null }, { lastListDate: null }] },
+    ] } }),
     db.section.count(),
     db.messageLog.count({ where: { status: { in: ["SENT", "SENT_BY_USER"] }, createdAt: { gte: new Date(new Date().setHours(0, 0, 0, 0)) } } }),
     db.preparedMessage.count({ where: { senderId: user.id, status: "READY" } }),
   ]);
-  const students = studentRows.length;
-  const detained = studentRows.filter(student => ["Detained"].includes(getStatus(student, DEFAULT_ATTENDANCE_THRESHOLD))).length;
   const stats = [
     { label: "Total students", value: students, icon: GraduationCap, accent: "teal", foot: "Across all sections" },
     { label: "Need follow-up", value: detained, icon: UserRoundCheck, accent: "rose", foot: "Attendance below threshold" },
@@ -32,6 +33,7 @@ export default async function Dashboard() {
   return (
     <main className="dashboard-page">
       <PageHeader eyebrow="DEPARTMENT OVERVIEW" title={<>Good day, {user.name.split(" ")[0]} <span>✦</span></>} subtitle="Here’s the latest picture of attendance follow-up across your sections." actions={<Button href="/sections" variant="outline" className="dashboard-action">View sections <ArrowUpRight size={16} /></Button>} className="dashboard-welcome" />
+      <UnfinishedSendBanner />
       <section className="metric-grid">
         {stats.map(({ label, value, icon: Icon, accent, foot }) => (
           <StatCard key={label} label={label} value={value} note={foot} icon={<Icon size={18} aria-hidden="true" />} accent={accent as "teal" | "rose" | "blue" | "amber"} />

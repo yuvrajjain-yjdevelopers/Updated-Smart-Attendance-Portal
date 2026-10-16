@@ -1,5 +1,6 @@
 import { db } from "@/lib/db";
-import { getSmsMetrics, getTrilingualSmsTemplate, getTrilingualWhatsAppTemplate, normalizeSmsText, renderTemplate, toAsciiSms } from "@/lib/messageTemplates";
+import { createHash } from "node:crypto";
+import { compileTemplate, getSmsMetrics, getTrilingualSmsTemplate, getTrilingualWhatsAppTemplate, normalizeSmsText, toAsciiSms } from "@/lib/messageTemplates";
 import { normalizeIndianMobile } from "@/lib/phone";
 import { parseDetainedSubjects } from "@/lib/detentionSubjects";
 import { DEFAULT_ATTENDANCE_THRESHOLD, formatAttendance, getEffectiveAttendance, getStatus } from "@/lib/attendance";
@@ -8,8 +9,11 @@ export function normalizePreparedNumber(value: string): string | null {
   try { return `91${normalizeIndianMobile(value)}`; } catch { return null; }
 }
 
-export function buildPreparedText(input: { template: string; studentName: string; regNo: string; section: string; avg: number | null; subjects: string[]; date: Date; senderName: string; senderMobile: string; collegeName: string; department: string; testMode: boolean; channel?: "SMS" | "WHATSAPP" }) {
-  const rendered = renderTemplate(input.template, {
+type TemplateValues = Record<string, string | number | null | undefined>;
+type TemplateRenderer = (values: TemplateValues) => string;
+export type PreparedTextInput = { template: string; studentName: string; regNo: string; section: string; avg: number | null; subjects: string[]; date: Date; senderName: string; senderMobile: string; collegeName: string; department: string; testMode: boolean; channel?: "SMS" | "WHATSAPP" };
+export function buildPreparedText(input: PreparedTextInput, renderer?: TemplateRenderer) {
+  const rendered = (renderer || compileTemplate(input.template))({
     student_name: input.studentName, reg_no: input.regNo, section: input.section,
     avg: formatAttendance(input.avg), detained_count: input.subjects.length ? input.subjects.length : "",
     subjects: input.subjects.join("\n"), subjects_short: input.subjects.slice(0, 3).join(", ") + (input.subjects.length > 3 ? ` and ${input.subjects.length - 3} more` : ""),
@@ -37,6 +41,57 @@ export function buildPreparedText(input: { template: string; studentName: string
   return compact.length <= 306 ? compact : `${compact.slice(0, 303)}...`;
 }
 
+export function buildPreparedTextBatch(inputs: PreparedTextInput[]) {
+  const renderers = new Map<string, TemplateRenderer>();
+  return inputs.map(input => {
+    let renderer = renderers.get(input.template);
+    if (!renderer) { renderer = compileTemplate(input.template); renderers.set(input.template, renderer); }
+    return buildPreparedText(input, renderer);
+  });
+}
+
+function sourceFingerprint(values: unknown) { return createHash("sha256").update(JSON.stringify(values)).digest("hex"); }
+
+/** Regenerate only missing or stale messages for the selected roster rows. */
+export async function prepareSelectedForSender(input: { senderId: string; sectionId: string; studentIds: string[]; channel: "SMS" | "WHATSAPP" }) {
+  const ids = [...new Set(input.studentIds)].slice(0, 500);
+  if (!ids.length) return;
+  const [settingRows, students, sender, existing] = await Promise.all([
+    db.setting.findMany({ select: { key: true, value: true } }),
+    db.student.findMany({ where: { id: { in: ids }, sectionId: input.sectionId }, include: { section: true } }),
+    db.user.findUnique({ where: { id: input.senderId }, select: { id: true, name: true, mobile: true } }),
+    db.preparedMessage.findMany({ where: { senderId: input.senderId, studentId: { in: ids }, channel: input.channel }, select: { id: true, studentId: true, status: true, sourceFingerprint: true } }),
+  ]);
+  if (!sender) throw new Error("Sender account not found.");
+  const settings = Object.fromEntries(settingRows.map(row => [row.key, row.value]));
+  const threshold = Number(settings.attendanceThreshold || settings.threshold || DEFAULT_ATTENDANCE_THRESHOLD);
+  const template = input.channel === "SMS" ? getTrilingualSmsTemplate(settings) : getTrilingualWhatsAppTemplate(settings);
+  const priorByStudent = new Map(existing.map(row => [row.studentId, row]));
+  const staleIds: string[] = [];
+  const candidates: Array<{ studentId: string; senderId: string; channel: "SMS" | "WHATSAPP"; status: "READY" | "MISSING_NUMBER"; toNumber: string | null; listDate: Date | null; sourceFingerprint: string; textInput: PreparedTextInput }> = [];
+  for (const student of students) {
+    const prior = priorByStudent.get(student.id);
+    if (getStatus(student, threshold) !== "Detained") {
+      if (prior && prior.status !== "SENT" && prior.status !== "OPENED") staleIds.push(prior.id);
+      continue;
+    }
+    if (prior?.status === "SENT" || prior?.status === "OPENED") continue;
+    const attendance = getEffectiveAttendance(student);
+    const subjects = attendance.source === "LIST" ? parseDetainedSubjects(student.detainedSubjects).map(subject => `${subject.code} - ${subject.name}`) : [];
+    const listDate = attendance.listDate ? new Date(attendance.listDate) : null;
+    const toNumber = normalizePreparedNumber(student.parentMobile);
+    const textInput: PreparedTextInput = { template, studentName: student.name, regNo: student.regNo, section: student.section.name, avg: attendance.pct, subjects, date: listDate || new Date(0), senderName: sender.name, senderMobile: sender.mobile || "", collegeName: settings.collegeName || "College", department: settings.department || "Department", testMode: settings.testMode !== "false", channel: input.channel };
+    const fingerprint = sourceFingerprint({ student: { name: student.name, regNo: student.regNo, parentMobile: student.parentMobile, avg: attendance.pct, subjects, listDate, section: student.section.name }, sender: { name: sender.name, mobile: sender.mobile }, template, testMode: settings.testMode !== "false", testNumber: settings.testNumber });
+    if (prior?.sourceFingerprint === fingerprint) continue;
+    if (prior) staleIds.push(prior.id);
+    candidates.push({ studentId: student.id, senderId: sender.id, channel: input.channel, status: toNumber ? "READY" : "MISSING_NUMBER", toNumber, listDate, sourceFingerprint: fingerprint, textInput });
+  }
+  if (staleIds.length) await db.preparedMessage.deleteMany({ where: { id: { in: staleIds }, status: { notIn: ["SENT", "OPENED"] } } });
+  const texts = buildPreparedTextBatch(candidates.map(candidate => candidate.textInput));
+  const creates = candidates.map((candidate, index) => ({ studentId: candidate.studentId, senderId: candidate.senderId, channel: candidate.channel, status: candidate.status, toNumber: candidate.toNumber, text: texts[index], listDate: candidate.listDate, sourceFingerprint: candidate.sourceFingerprint }));
+  if (creates.length) await db.preparedMessage.createMany({ data: creates });
+}
+
 export async function regeneratePreparedMessages(sectionId?: string, senderOnlyId?: string) {
   const [settingRows, allStudents, senders] = await Promise.all([
     db.setting.findMany({ select: { key: true, value: true } }),
@@ -45,11 +100,12 @@ export async function regeneratePreparedMessages(sectionId?: string, senderOnlyI
   ]);
   const settings = Object.fromEntries(settingRows.map(x => [x.key, x.value]));
   const threshold = Number(settings.attendanceThreshold || settings.threshold || DEFAULT_ATTENDANCE_THRESHOLD);
+  const renderers = { SMS: compileTemplate(getTrilingualSmsTemplate(settings)), WHATSAPP: compileTemplate(getTrilingualWhatsAppTemplate(settings)) };
   const eligibleStudents = allStudents.filter(student => ["Detained"].includes(getStatus(student, threshold)));
   const senderIds = senders.map(sender => sender.id);
   const existingRows = senderIds.length ? await db.preparedMessage.findMany({
     where: { senderId: { in: senderIds }, ...(sectionId ? { student: { sectionId } } : {}) },
-    select: { id: true, studentId: true, senderId: true, channel: true, status: true, toNumber: true, text: true, listDate: true },
+    select: { id: true, studentId: true, senderId: true, channel: true, status: true, toNumber: true, text: true, listDate: true, sourceFingerprint: true },
   }) : [];
   const existingByKey = new Map(existingRows.map(row => [`${row.studentId}:${row.senderId}:${row.channel}`, row]));
   const desiredKeys = new Set<string>();
@@ -63,17 +119,18 @@ export async function regeneratePreparedMessages(sectionId?: string, senderOnlyI
       if (sender.role === "TEACHER" && sender.sectionId !== student.sectionId) continue;
       for (const channel of ["SMS", "WHATSAPP"] as const) {
         const template = channel === "SMS" ? getTrilingualSmsTemplate(settings) : getTrilingualWhatsAppTemplate(settings);
-        const text = buildPreparedText({ template, studentName: student.name, regNo: student.regNo, section: student.section.name, avg: effective.pct, subjects, date: listDate || new Date(0), senderName: sender.name, senderMobile: sender.mobile || "", collegeName: settings.collegeName || "College", department: settings.department || "Department", testMode: settings.testMode !== "false", channel });
+        const fingerprint = sourceFingerprint({ student: { name: student.name, regNo: student.regNo, parentMobile: student.parentMobile, avg: effective.pct, subjects, listDate, section: student.section.name }, sender: { name: sender.name, mobile: sender.mobile }, template, testMode: settings.testMode !== "false", testNumber: settings.testNumber });
+        const text = buildPreparedText({ template, studentName: student.name, regNo: student.regNo, section: student.section.name, avg: effective.pct, subjects, date: listDate || new Date(0), senderName: sender.name, senderMobile: sender.mobile || "", collegeName: settings.collegeName || "College", department: settings.department || "Department", testMode: settings.testMode !== "false", channel }, renderers[channel]);
         const compoundKey = `${student.id}:${sender.id}:${channel}`;
         desiredKeys.add(compoundKey);
         const previous = existingByKey.get(compoundKey);
         const status = previous?.status === "SENT" || previous?.status === "OPENED" ? previous.status : number ? "READY" : "MISSING_NUMBER";
         const previousListDate = previous?.listDate?.getTime() ?? null;
         const nextListDate = listDate?.getTime() ?? null;
-        const changed = !previous || previous.status !== status || previous.toNumber !== number || previous.text !== text || previousListDate !== nextListDate;
+        const changed = !previous || previous.status !== status || previous.toNumber !== number || previous.text !== text || previousListDate !== nextListDate || previous.sourceFingerprint !== fingerprint;
         if (!changed) continue;
         const key = { studentId_senderId_channel: { studentId: student.id, senderId: sender.id, channel } };
-        writes.push(db.preparedMessage.upsert({ where: key, create: { studentId: student.id, senderId: sender.id, channel, status, toNumber: number, text, listDate }, update: { status, toNumber: number, text, listDate } }));
+        writes.push(db.preparedMessage.upsert({ where: key, create: { studentId: student.id, senderId: sender.id, channel, status, toNumber: number, text, listDate, sourceFingerprint: fingerprint }, update: { status, toNumber: number, text, listDate, sourceFingerprint: fingerprint } }));
       }
     }
   }

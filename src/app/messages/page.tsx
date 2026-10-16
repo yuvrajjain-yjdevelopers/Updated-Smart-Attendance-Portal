@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { AlertCircle, MessageSquareText, Radio, Send, ShieldCheck } from "lucide-react";
 import { PageHeader } from "@/app/components/ui";
+import UnfinishedSendBanner from "@/app/components/unfinished-send-banner";
 
 type Log = {
   id: string;
@@ -58,6 +59,7 @@ export default function MessagesPage() {
   return (
     <main className="messages-page">
       <PageHeader className="messages-heading" eyebrow="COMMUNICATION" title="Messages" subtitle="Review delivery activity and see which account sent each message." actions={<div className="messages-heading-icon" aria-hidden="true"><MessageSquareText size={22} /></div>} />
+      <UnfinishedSendBanner />
 
       {error && <div role="alert" className="messages-error"><AlertCircle size={17} /><span>{error}</span></div>}
 

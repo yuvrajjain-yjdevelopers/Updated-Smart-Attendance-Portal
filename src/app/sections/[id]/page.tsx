@@ -6,19 +6,18 @@ import ClassMessaging from "@/app/components/class-messaging";
 import DetentionUploader from "@/app/components/detention-uploader";
 import SectionStudents from "@/app/components/section-students";
 import SectionTabs from "@/app/components/section-tabs";
-import { ensurePreparedForSender } from "@/lib/preparedMessages";
+import UnfinishedSendBanner from "@/app/components/unfinished-send-banner";
 import { DEFAULT_ATTENDANCE_THRESHOLD, attendanceSourceLabel, getEffectiveAttendance, getStatus } from "@/lib/attendance";
 import { parseDetainedSubjects } from "@/lib/detentionSubjects";
 
 export const dynamic = "force-dynamic";
 
-export default async function SectionPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function SectionPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ resumeSession?: string }> }) {
   const user = await currentUser();
   if (!user) redirect("/login");
   if (user.role !== "HOD") redirect("/my-class");
 
-  const { id } = await params;
-  await ensurePreparedForSender(user.id, id);
+  const [{ id }, query] = await Promise.all([params, searchParams]);
   const [section, settings] = await Promise.all([
     db.section.findUnique({
       where: { id },
@@ -60,8 +59,10 @@ export default async function SectionPage({ params }: { params: Promise<{ id: st
           <b>{section.uploads[0]?.uptoDate.toLocaleDateString("en-GB") ?? "No list applied"}</b>
         </div>
       </header>
+      <UnfinishedSendBanner />
       <DetentionUploader sectionId={section.id} sectionName={section.name} />
       <SectionTabs
+        initialTab={query.resumeSession ? "messages" : "students"}
         students={<SectionStudents sectionId={section.id} />}
         messaging={
           <section className="section-detail-messaging">
@@ -69,7 +70,7 @@ export default async function SectionPage({ params }: { params: Promise<{ id: st
               <div><span className="eyebrow">PARENT FOLLOW-UP</span><h2>Students below threshold · {followupStudents.length}</h2><p>Ready to send: {readyToSend}</p></div>
               <p>Review the list and recipients before sending a message.</p>
             </div>
-            <ClassMessaging students={followupStudents.map(student => ({ id: student.id, name: student.name, regNo: student.regNo, parentMobile: student.parentMobile, avgAtt: student.avgAtt, isDetained: student.isDetained, statusLabel: student.statusLabel, attendanceSourceLabel: student.attendanceSourceLabel }))} senderName={user.name} canSend isHod />
+            <ClassMessaging sectionId={section.id} mobileLinkMode={user.mobileLinkMode} students={followupStudents.map(student => ({ id: student.id, name: student.name, regNo: student.regNo, parentMobile: student.parentMobile, avgAtt: student.avgAtt, isDetained: student.isDetained, statusLabel: student.statusLabel, attendanceSourceLabel: student.attendanceSourceLabel }))} senderName={user.name} senderMobile={user.mobile || ""} canSend isHod />
           </section>
         }
       />

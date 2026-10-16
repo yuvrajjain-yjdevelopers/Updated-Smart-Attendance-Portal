@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { redirect } from "next/navigation";
 import ClassMessaging from "@/app/components/class-messaging";
 import SectionStudents from "@/app/components/section-students";
+import UnfinishedSendBanner from "@/app/components/unfinished-send-banner";
 import { DEFAULT_ATTENDANCE_THRESHOLD, attendanceSourceLabel, getEffectiveAttendance, getStatus } from "@/lib/attendance";
 
 export const dynamic = "force-dynamic";
@@ -53,10 +54,11 @@ export default async function MyClass() {
         <div><p className="eyebrow">TEACHER WORKSPACE</p><h1>{user.section?.name ?? "My class"}</h1><p>View and update your full student roster, then filter students who need attendance follow-up to contact their parents.</p></div>
         <div className="teacher-class-count"><b>{followupStudents.length}</b><span>students need follow-up</span></div>
       </header>
+      <UnfinishedSendBanner />
       {sectionId ? <SectionStudents sectionId={sectionId} mode="teacher" /> : <section className="teacher-class-messaging"><p>Your account is not assigned to a section yet. Ask the HOD to assign your class.</p></section>}
       <section className="teacher-class-messaging">
         <div className="teacher-class-subheading"><h2>Parent messages</h2><p>Only students in your assigned section who are below the attendance threshold appear here. Sending also requires HOD permission for your account.</p></div>
-        <ClassMessaging students={followupStudents} senderName={user.name} canSend={user.canSend} />
+        <ClassMessaging sectionId={sectionId || ""} mobileLinkMode={user.mobileLinkMode} students={followupStudents} senderName={user.name} senderMobile={user.mobile || ""} canSend={user.canSend} />
       </section>
     </main>
   );
