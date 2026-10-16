@@ -19,17 +19,30 @@ export default async function SectionPage({ params }: { params: Promise<{ id: st
 
   const { id } = await params;
   await ensurePreparedForSender(user.id, id);
-  const section = await db.section.findUnique({
-    where: { id },
-    include: {
-      students: { orderBy: [{ avgAtt: "asc" }, { totalAttendancePct: "asc" }] },
-      uploads: { orderBy: { uptoDate: "desc" }, take: 1 },
-    },
-  });
+  const [section, settings] = await Promise.all([
+    db.section.findUnique({
+      where: { id },
+      select: { id: true, name: true, uploads: { orderBy: { uptoDate: "desc" }, take: 1, select: { uptoDate: true } } },
+    }),
+    db.setting.findMany({ where: { key: { in: ["attendanceThreshold", "threshold"] } }, select: { key: true, value: true } }),
+  ]);
   if (!section) notFound();
-  const followupStudents = section.students.map(student => {
+  const settingValues = Object.fromEntries(settings.map(setting => [setting.key, setting.value]));
+  const threshold = Number(settingValues.attendanceThreshold || settingValues.threshold || DEFAULT_ATTENDANCE_THRESHOLD);
+  const belowThresholdStudents = await db.student.findMany({
+    where: {
+      sectionId: id,
+      OR: [
+        { avgAtt: { lt: threshold }, lastListDate: { not: null } },
+        { totalAttendancePct: { lt: threshold }, OR: [{ avgAtt: null }, { lastListDate: null }] },
+      ],
+    },
+    select: { id: true, name: true, regNo: true, parentMobile: true, sectionId: true, avgAtt: true, totalAttendancePct: true, lastListDate: true, isDetained: true, lowSubjectCount: true, detainedSubjects: true },
+  });
+  const followupStudents = belowThresholdStudents.map(student => {
     const attendance = getEffectiveAttendance(student);
-    return { ...student, avgAtt: attendance.pct, isDetained: getStatus(student, DEFAULT_ATTENDANCE_THRESHOLD) === "Detained", statusLabel: getStatus(student, DEFAULT_ATTENDANCE_THRESHOLD), attendanceSourceLabel: attendanceSourceLabel(attendance), detainedSubjects: attendance.source === "LIST" ? parseDetainedSubjects(student.detainedSubjects) : [] };
+    const statusLabel = getStatus(student, threshold);
+    return { ...student, avgAtt: attendance.pct, isDetained: statusLabel === "Detained", statusLabel, attendanceSourceLabel: attendanceSourceLabel(attendance), detainedSubjects: attendance.source === "LIST" ? parseDetainedSubjects(student.detainedSubjects) : [] };
   }).filter(student => student.statusLabel === "Detained" || student.statusLabel === "Below 75% (roster)");
   const readyToSend = await db.preparedMessage.count({ where: { senderId: user.id, student: { sectionId: id }, status: "READY" } });
 

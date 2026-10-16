@@ -37,6 +37,7 @@ export default function SectionStudents({ sectionId }: { sectionId: string }) {
   const [query, setQuery] = useState("");
   const [missing, setMissing] = useState(false);
   const [sort, setSort] = useState<"regNo" | "name">("regNo");
+  const [page, setPage] = useState(0);
   const [notice, setNotice] = useState("");
   const [paste, setPaste] = useState("");
   const [preview, setPreview] = useState<Draft[] | null>(null);
@@ -68,6 +69,9 @@ export default function SectionStudents({ sectionId }: { sectionId: string }) {
   const visible = useMemo(() => rows
     .filter(row => (!missing || !row.parentMobile) && `${row.regNo} ${row.name}`.toLowerCase().includes(query.toLowerCase()))
     .sort((a, b) => a[sort].localeCompare(b[sort])), [rows, missing, query, sort]);
+  const pageSize = 50;
+  const pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
+  const pageRows = visible.slice(page * pageSize, (page + 1) * pageSize);
 
   async function save() {
     setBusy(true);
@@ -115,22 +119,21 @@ export default function SectionStudents({ sectionId }: { sectionId: string }) {
   async function importPaste() {
     if (!preview) return;
     setBusy(true);
-    let added = 0;
-    let failed = 0;
-    for (const item of preview) {
-      try {
-        const response = await fetch(`/api/sections/${sectionId}/students`, {
-          method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...item, totalAttendancePct: item.totalAttendancePct ? Number(item.totalAttendancePct) : null }),
-        });
-        if (response.ok) added++; else failed++;
-      } catch { failed++; }
-    }
-    setNotice(`Imported ${added}; ${failed} rows failed validation or had duplicate registration numbers.`);
-    setPreview(null);
-    setPaste("");
-    await load();
-    setBusy(false);
+    try {
+      const quote = (value: string) => `"${value.replaceAll('"', '""')}"`;
+      const csv = [
+        ["reg_no", "name", "parent_mobile", "student_mobile", "branch", "total_attendance_pct"],
+        ...preview.map(item => [item.regNo, item.name, item.parentMobile, item.studentMobile, item.branch, item.totalAttendancePct]),
+      ].map(row => row.map(quote).join(",")).join("\r\n");
+      const response = await fetch("/api/students/import", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileName: "pasted-students.csv", csv, targetSectionId: sectionId, createSections: false }),
+      });
+      const data = await response.json();
+      setNotice(response.ok ? data.message || "Student rows imported." : data.error || "Could not import these rows.");
+      if (response.ok) { setPreview(null); setPaste(""); setPage(0); await load(); }
+    } catch { setNotice("Could not import pasted rows. Check the connection and try again."); }
+    finally { setBusy(false); }
   }
 
   async function importFile(file: File) {
@@ -182,8 +185,9 @@ export default function SectionStudents({ sectionId }: { sectionId: string }) {
         <section className="section-import-card"><div><h3>Paste rows from Excel</h3><p>Columns: registration, name, parent mobile, student mobile, branch, attendance.</p></div><textarea value={paste} onChange={event => setPaste(event.target.value)} placeholder="Paste tab-separated cells here" rows={3} /><div className="section-import-actions"><button type="button" className="section-action-secondary" onClick={parsePaste} disabled={!paste.trim()}>Preview pasted rows</button>{preview && <button type="button" className="section-action-primary" onClick={() => void importPaste()} disabled={busy}>Import {preview.length} rows</button>}</div>{preview && <p className="section-preview-note">Preview: {preview.slice(0, 5).map(row => `${row.regNo} · ${row.name}`).join(" / ")}{preview.length > 5 ? ` · +${preview.length - 5} more` : ""}</p>}</section>
       </div>
 
-      <div className="section-roster-tools"><input aria-label="Search students" value={query} onChange={event => setQuery(event.target.value)} placeholder="Search by name or registration" /><label><input type="checkbox" checked={missing} onChange={event => setMissing(event.target.checked)} /> Parent mobile missing</label><select aria-label="Sort students" value={sort} onChange={event => setSort(event.target.value as "regNo" | "name")}><option value="regNo">Sort by registration</option><option value="name">Sort by name</option></select><span>Showing {visible.length} of {rows.length}</span></div>
-        <div className="section-student-table-wrap"><table className="section-student-table"><thead><tr><th>Registration</th><th>Student</th><th>Parent mobile</th><th>Attendance</th><th>Status and subjects</th><th>Actions</th></tr></thead><tbody>{visible.map(student => {const subjects=parseDetainedSubjects(student.detainedSubjects);return <tr key={student.id}><td className="section-reg-cell">{student.regNo}</td><td className="section-name-cell">{student.name}</td><td>{student.parentMobile || <span className="missing-pill">Missing</span>}</td><td>{student.effectiveAttendance===null?"—":`${student.effectiveAttendance}%`} {student.attendanceSourceLabel&&<small className="attendance-source-tag">{student.attendanceSourceLabel}</small>}</td><td><span className={student.attendanceStatus==="Detained"||student.attendanceStatus.startsWith("Below 75%")?"detained-pill":"ok-pill"}>{student.attendanceStatus}</span>{student.attendanceSource==="LIST"&&subjects.map(subject=><span className="subject-code-name" key={subject.code}>{subject.code} · {subject.name}</span>)}</td><td><div className="section-row-actions"><button type="button" onClick={() => { setEditing(student.id); setDraft({ regNo: student.regNo, name: student.name, parentMobile: student.parentMobile, studentMobile: student.studentMobile || "", branch: student.branch || "", totalAttendancePct: student.totalAttendancePct?.toString() || "" }); }}>Edit</button><button type="button" disabled={busy} onClick={() => void remove(student)}>Delete</button></div></td></tr>})}{visible.length === 0 && <tr><td colSpan={6} className="section-roster-empty">No students match this view.</td></tr>}</tbody></table></div>
+      <div className="section-roster-tools"><input aria-label="Search students" value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} placeholder="Search by name or registration" /><label><input type="checkbox" checked={missing} onChange={event => { setMissing(event.target.checked); setPage(0); }} /> Parent mobile missing</label><select aria-label="Sort students" value={sort} onChange={event => { setSort(event.target.value as "regNo" | "name"); setPage(0); }}><option value="regNo">Sort by registration</option><option value="name">Sort by name</option></select><span>Showing {pageRows.length} of {visible.length}</span></div>
+        <div className="section-student-table-wrap"><table className="section-student-table"><thead><tr><th>Registration</th><th>Student</th><th>Parent mobile</th><th>Attendance</th><th>Status and subjects</th><th>Actions</th></tr></thead><tbody>{pageRows.map(student => {const subjects=parseDetainedSubjects(student.detainedSubjects);return <tr key={student.id}><td className="section-reg-cell">{student.regNo}</td><td className="section-name-cell">{student.name}</td><td>{student.parentMobile || <span className="missing-pill">Missing</span>}</td><td>{student.effectiveAttendance===null?"—":`${student.effectiveAttendance}%`} {student.attendanceSourceLabel&&<small className="attendance-source-tag">{student.attendanceSourceLabel}</small>}</td><td><span className={student.attendanceStatus==="Detained"||student.attendanceStatus.startsWith("Below 75%")?"detained-pill":"ok-pill"}>{student.attendanceStatus}</span>{student.attendanceSource==="LIST"&&subjects.map(subject=><span className="subject-code-name" key={subject.code}>{subject.code} · {subject.name}</span>)}</td><td><div className="section-row-actions"><button type="button" onClick={() => { setEditing(student.id); setDraft({ regNo: student.regNo, name: student.name, parentMobile: student.parentMobile, studentMobile: student.studentMobile || "", branch: student.branch || "", totalAttendancePct: student.totalAttendancePct?.toString() || "" }); }}>Edit</button><button type="button" disabled={busy} onClick={() => void remove(student)}>Delete</button></div></td></tr>})}{pageRows.length === 0 && <tr><td colSpan={6} className="section-roster-empty">No students match this view.</td></tr>}</tbody></table></div>
+      {visible.length > pageSize && <nav className="directory-pagination" aria-label="Roster pages"><span>Page {page + 1} of {pageCount}</span><button type="button" disabled={page === 0} onClick={() => setPage(current => current - 1)}>Previous</button><button type="button" disabled={page + 1 >= pageCount} onClick={() => setPage(current => current + 1)}>Next</button></nav>}
       {notice && <p role="status" className="section-roster-notice">{notice}</p>}
     </section>
   );
