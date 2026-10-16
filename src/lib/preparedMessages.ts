@@ -51,14 +51,18 @@ export function buildPreparedTextBatch(inputs: PreparedTextInput[]) {
 }
 
 function sourceFingerprint(values: unknown) { return createHash("sha256").update(JSON.stringify(values)).digest("hex"); }
+export function canReusePreparedMessage(prior: { status: string; sourceFingerprint: string | null } | undefined, fingerprint: string) {
+  return Boolean(prior && prior.status !== "SENT" && prior.status !== "OPENED" && prior.sourceFingerprint === fingerprint);
+}
 
 /** Regenerate only missing or stale messages for the selected roster rows. */
-export async function prepareSelectedForSender(input: { senderId: string; sectionId: string; studentIds: string[]; channel: "SMS" | "WHATSAPP" }) {
+export async function prepareSelectedForSender(input: { senderId: string; sectionId: string; studentIds: string[]; channel: "SMS" | "WHATSAPP" }, onProgress?: (progress: { processed: number; total: number; prepared: number }) => void | Promise<void>) {
   const ids = [...new Set(input.studentIds)].slice(0, 500);
   if (!ids.length) return;
+  const preparationKeys = ["attendanceThreshold", "threshold", "smsTemplateAllLanguages", "whatsappTemplateAllLanguages", "testMode", "testNumber", "collegeName", "department"];
   const [settingRows, students, sender, existing] = await Promise.all([
-    db.setting.findMany({ select: { key: true, value: true } }),
-    db.student.findMany({ where: { id: { in: ids }, sectionId: input.sectionId }, include: { section: true } }),
+    db.setting.findMany({ where: { key: { in: preparationKeys } }, select: { key: true, value: true } }),
+    db.student.findMany({ where: { id: { in: ids }, sectionId: input.sectionId }, select: { id: true, name: true, regNo: true, parentMobile: true, avgAtt: true, totalAttendancePct: true, lastListDate: true, isDetained: true, lowSubjectCount: true, detainedSubjects: true, section: { select: { name: true } } } }),
     db.user.findUnique({ where: { id: input.senderId }, select: { id: true, name: true, mobile: true } }),
     db.preparedMessage.findMany({ where: { senderId: input.senderId, studentId: { in: ids }, channel: input.channel }, select: { id: true, studentId: true, status: true, sourceFingerprint: true } }),
   ]);
@@ -68,27 +72,34 @@ export async function prepareSelectedForSender(input: { senderId: string; sectio
   const template = input.channel === "SMS" ? getTrilingualSmsTemplate(settings) : getTrilingualWhatsAppTemplate(settings);
   const priorByStudent = new Map(existing.map(row => [row.studentId, row]));
   const staleIds: string[] = [];
-  const candidates: Array<{ studentId: string; senderId: string; channel: "SMS" | "WHATSAPP"; status: "READY" | "MISSING_NUMBER"; toNumber: string | null; listDate: Date | null; sourceFingerprint: string; textInput: PreparedTextInput }> = [];
-  for (const student of students) {
+  const candidates: Array<{ studentId: string; senderId: string; channel: "SMS" | "WHATSAPP"; status: "READY" | "MISSING_NUMBER"; toNumber: string | null; listDate: Date | null; sourceFingerprint: string; text: string }> = [];
+  const renderer = compileTemplate(template);
+  let prepared = 0;
+  for (const [index, student] of students.entries()) {
     const prior = priorByStudent.get(student.id);
     if (getStatus(student, threshold) !== "Detained") {
-      if (prior && prior.status !== "SENT" && prior.status !== "OPENED") staleIds.push(prior.id);
+      if (prior) staleIds.push(prior.id);
+      if (onProgress && (index % 4 === 3 || index === students.length - 1)) await onProgress({ processed: index + 1, total: students.length, prepared });
       continue;
     }
-    if (prior?.status === "SENT" || prior?.status === "OPENED") continue;
     const attendance = getEffectiveAttendance(student);
     const subjects = attendance.source === "LIST" ? parseDetainedSubjects(student.detainedSubjects).map(subject => `${subject.code} - ${subject.name}`) : [];
     const listDate = attendance.listDate ? new Date(attendance.listDate) : null;
     const toNumber = normalizePreparedNumber(student.parentMobile);
     const textInput: PreparedTextInput = { template, studentName: student.name, regNo: student.regNo, section: student.section.name, avg: attendance.pct, subjects, date: listDate || new Date(0), senderName: sender.name, senderMobile: sender.mobile || "", collegeName: settings.collegeName || "College", department: settings.department || "Department", testMode: settings.testMode !== "false", channel: input.channel };
     const fingerprint = sourceFingerprint({ student: { name: student.name, regNo: student.regNo, parentMobile: student.parentMobile, avg: attendance.pct, subjects, listDate, section: student.section.name }, sender: { name: sender.name, mobile: sender.mobile }, template, testMode: settings.testMode !== "false", testNumber: settings.testNumber });
-    if (prior?.sourceFingerprint === fingerprint) continue;
-    if (prior) staleIds.push(prior.id);
-    candidates.push({ studentId: student.id, senderId: sender.id, channel: input.channel, status: toNumber ? "READY" : "MISSING_NUMBER", toNumber, listDate, sourceFingerprint: fingerprint, textInput });
+    if (canReusePreparedMessage(prior, fingerprint)) {
+      prepared += 1;
+    } else {
+      if (prior) staleIds.push(prior.id);
+      candidates.push({ studentId: student.id, senderId: sender.id, channel: input.channel, status: toNumber ? "READY" : "MISSING_NUMBER", toNumber, listDate, sourceFingerprint: fingerprint, text: buildPreparedText(textInput, renderer) });
+      prepared += 1;
+    }
+    if (onProgress && (index % 4 === 3 || index === students.length - 1)) await onProgress({ processed: index + 1, total: students.length, prepared });
   }
-  if (staleIds.length) await db.preparedMessage.deleteMany({ where: { id: { in: staleIds }, status: { notIn: ["SENT", "OPENED"] } } });
-  const texts = buildPreparedTextBatch(candidates.map(candidate => candidate.textInput));
-  const creates = candidates.map((candidate, index) => ({ studentId: candidate.studentId, senderId: candidate.senderId, channel: candidate.channel, status: candidate.status, toNumber: candidate.toNumber, text: texts[index], listDate: candidate.listDate, sourceFingerprint: candidate.sourceFingerprint }));
+  if (onProgress && students.length === 0) await onProgress({ processed: 0, total: 0, prepared: 0 });
+  if (staleIds.length) await db.preparedMessage.deleteMany({ where: { id: { in: staleIds } } });
+  const creates = candidates.map(candidate => ({ studentId: candidate.studentId, senderId: candidate.senderId, channel: candidate.channel, status: candidate.status, toNumber: candidate.toNumber, text: candidate.text, listDate: candidate.listDate, sourceFingerprint: candidate.sourceFingerprint }));
   if (creates.length) await db.preparedMessage.createMany({ data: creates });
 }
 

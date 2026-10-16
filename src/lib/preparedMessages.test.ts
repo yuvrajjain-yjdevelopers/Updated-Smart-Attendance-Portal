@@ -1,8 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
-import { buildPreparedTextBatch } from "@/lib/preparedMessages";
+import { buildPreparedTextBatch, canReusePreparedMessage } from "@/lib/preparedMessages";
 import { DEFAULT_TRILINGUAL_WHATSAPP_TEMPLATE } from "@/lib/messageTemplates";
 
 describe("on-demand message preparation", () => {
+  it("regenerates a deliberately prepared resend after an earlier open or send", () => {
+    expect(canReusePreparedMessage({ status: "READY", sourceFingerprint: "same" }, "same")).toBe(true);
+    expect(canReusePreparedMessage({ status: "SENT", sourceFingerprint: "same" }, "same")).toBe(false);
+    expect(canReusePreparedMessage({ status: "OPENED", sourceFingerprint: "same" }, "same")).toBe(false);
+  });
+
   it("renders 300 WhatsApp messages in memory in under one second without readiness or network checks", () => {
     const fetchSpy = vi.spyOn(globalThis, "fetch");
     const records = Array.from({ length: 300 }, (_, index) => ({

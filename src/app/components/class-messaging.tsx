@@ -8,9 +8,18 @@ import { getSmsMetrics, MAX_SMS_PARTS } from "@/lib/messageTemplates";
 type Student = { id: string; name: string; regNo: string; parentMobile: string; avgAtt: number | null; isDetained: boolean; statusLabel: string; attendanceSourceLabel: string };
 type Prepared = { id: string; studentId: string; name: string; regNo: string; avgAtt: number | null; attendanceSource: "LIST" | "ROSTER" | "NONE"; attendanceSourceLabel: string; statusLabel: string; section: string; channel: "SMS" | "WHATSAPP"; status: string; toNumber: string | null; text: string; excludeReason?: string | null };
 type Queue = { id: string; preparedId: string; name: string; regNo: string; avgAtt: number | null; statusLabel: string; section: string; toNumber: string; text: string; channel: "SMS" | "WHATSAPP"; status: string };
+type PrepareProgress = { processed: number; total: number; prepared: number };
 type Props = { students: Student[]; senderName: string; senderMobile?: string; sectionId: string; mobileLinkMode?: "SMS_LINK" | "GOOGLE_MESSAGES" | "PHONE"; canSend: boolean; isHod?: boolean };
 type Channel = "SMS" | "WHATSAPP";
+type ApiResponse = ReturnType<typeof JSON.parse>;
 function toClientMode(mode: "SMS_LINK" | "GOOGLE_MESSAGES" | "PHONE") { return mode === "GOOGLE_MESSAGES" ? "google-messages" : mode === "PHONE" ? "phone" : "sms-link"; }
+
+async function readApiResponse<T = ApiResponse>(response: Response): Promise<T> {
+  const body = await response.text();
+  if (!body.trim()) throw new Error(`The server returned an empty response (HTTP ${response.status}). Please retry.`);
+  try { return JSON.parse(body) as T; }
+  catch { throw new Error(`The server returned an invalid response (HTTP ${response.status}). Please refresh and retry.`); }
+}
 
 export default function ClassMessaging({ students, senderName, senderMobile = "", sectionId, mobileLinkMode = "SMS_LINK", canSend, isHod = false }: Props) {
   const [prepared, setPrepared] = useState<Prepared[]>([]);
@@ -30,7 +39,11 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
   const [copied, setCopied] = useState("");
   const [filter, setFilter] = useState("");
   const [preparationMs, setPreparationMs] = useState<number | null>(null);
+  const [prepareProgress, setPrepareProgress] = useState<PrepareProgress | null>(null);
   const [editingPrepared, setEditingPrepared] = useState<string[]>([]);
+  const [dirtyPrepared, setDirtyPrepared] = useState<string[]>([]);
+  const [expandedPrepared, setExpandedPrepared] = useState<string[]>([]);
+  const [debugOpen, setDebugOpen] = useState(false);
   const [setupOpen, setSetupOpen] = useState(false);
   const [connectionKind, setConnectionKind] = useState<"WHATSAPP_WEB" | "MOBILE_LINK">("MOBILE_LINK");
   const [conflictSession, setConflictSession] = useState<{ id: string; sectionId: string; sectionName: string; channel: Channel } | null>(null);
@@ -38,7 +51,7 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
 
   const loadSession = useCallback(async (id: string) => {
     const response = await fetch(`/api/send-sessions/${id}`, { cache: "no-store" });
-    const data = await response.json();
+    const data = await readApiResponse(response);
     if (!response.ok) throw new Error(data.error || "Could not resume this send.");
     setSessionId(data.session.id);
     setChannel(data.session.channel);
@@ -54,14 +67,14 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
 
   useEffect(() => {
     queueMicrotask(() => setMode(toClientMode(mobileLinkMode)));
-    void fetch("/api/auth/me").then(response => response.json()).then(data => { setTestMode(data.testMode !== false); setTestNumber(data.testNumber || ""); }).catch(() => {});
+    void fetch("/api/auth/me").then(readApiResponse).then(data => { setTestMode(data.testMode !== false); setTestNumber(data.testNumber || ""); }).catch(() => {});
     const resumeId = new URLSearchParams(window.location.search).get("resumeSession");
     if (resumeId) queueMicrotask(() => { void loadSession(resumeId).catch(error => setNotice(error instanceof Error ? error.message : "Could not resume this send.")); });
     const refresh = () => {
       if (document.visibilityState !== "visible") return;
       const activeId = sessionId || localStorage.getItem("attendance-active-send");
       if (activeId) void loadSession(activeId).catch(() => {});
-      void fetch("/api/send-sessions", { cache: "no-store" }).then(response => response.json()).then(data => {
+      void fetch("/api/send-sessions", { cache: "no-store" }).then(readApiResponse).then(data => {
         if (!activeId && data.sessions?.length) setNotice(`Unfinished ${data.sessions[0].channel} send is available. Resume it from the unfinished-send banner.`);
       }).catch(() => {});
     };
@@ -77,6 +90,7 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
   const ready = useMemo(() => prepared.filter(message => message.status === "READY" && message.toNumber && !excluded.includes(message.id)), [prepared, excluded]);
   const oversizedSms = channel === "SMS" ? ready.filter(message => getSmsMetrics(message.text).parts > MAX_SMS_PARTS) : [];
   const current = queue[cursor];
+  const preparing = loading && preparationMs === null;
 
   async function chooseMode(value: string) {
     setMode(value);
@@ -93,26 +107,59 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
     setPrepared([]);
     setExcluded([]);
     setPreparationMs(null);
+    setPrepareProgress({ processed: 0, total: selected.length, prepared: 0 });
     setLoading(true);
     const started = performance.now();
     try {
-      const params = new URLSearchParams({ studentIds: selected.join(","), sectionId, channel: channelToPrepare });
+      const params = new URLSearchParams({ studentIds: selected.join(","), sectionId, channel: channelToPrepare, stream: "1" });
       const response = await fetch(`/api/messages/prepared?${params.toString()}`, { cache: "no-store" });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || "Could not prepare selected messages.");
+      if (!response.ok) { const error = await readApiResponse(response); throw new Error(error.error || "Could not prepare selected messages."); }
+      let data: { messages: Prepared[]; preparedMs: number; testMode: boolean; testNumber: string } | null = null;
+      if (response.headers.get("content-type")?.includes("text/event-stream") && response.body) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          buffer += decoder.decode(value, { stream: !done });
+          const frames = buffer.split(/\r?\n\r?\n/);
+          buffer = frames.pop() || "";
+          for (const frame of frames) {
+            const line = frame.split(/\r?\n/).find(item => item.startsWith("data: "));
+            if (!line) continue;
+            const event = JSON.parse(line.slice(6));
+            if (event.type === "progress") setPrepareProgress(event.progress);
+            if (event.type === "error") throw new Error(event.message || "Could not prepare selected messages.");
+            if (event.type === "complete") data = event.data;
+          }
+          if (done) break;
+        }
+      } else {
+        data = await readApiResponse<{ messages: Prepared[]; preparedMs: number; testMode: boolean; testNumber: string }>(response);
+      }
+      if (!data) throw new Error("The server closed the preparation stream before it finished.");
       setPrepared(data.messages || []);
+      setDirtyPrepared([]);
+      setExpandedPrepared(data.messages?.[0]?.id ? [data.messages[0].id] : []);
       setPreparationMs(Math.max(data.preparedMs ?? 0, Math.round(performance.now() - started)));
+      setPrepareProgress({ processed: selected.length, total: selected.length, prepared: data.messages.length });
       setTestMode(data.testMode !== false);
       setTestNumber(data.testNumber || "");
-    } catch (error) { setNotice(error instanceof Error ? error.message : "Could not prepare selected messages."); }
+    } catch (error) { setPrepareProgress(null); setNotice(error instanceof Error ? error.message : "Could not prepare selected messages."); }
     finally { setLoading(false); }
   }
 
   async function saveEditedMessages() {
-    for (const message of ready) {
+    const dirty = ready.filter(message => dirtyPrepared.includes(message.id));
+    for (const message of dirty) {
       const response = await fetch(`/api/messages/prepared/${message.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text: message.text }) });
-      if (!response.ok) { const data = await response.json().catch(() => ({})); throw new Error(data.error || `Could not save ${message.name}'s edited message.`); }
+      if (!response.ok) {
+        let reason = `Could not save ${message.name}'s edited message (HTTP ${response.status}).`;
+        try { const data = await readApiResponse(response); reason = data.error || reason; } catch (error) { if (error instanceof Error) reason = error.message; }
+        throw new Error(reason);
+      }
     }
+    setDirtyPrepared(value => value.filter(id => !dirty.some(message => message.id === id)));
   }
 
   async function startQueue() {
@@ -123,7 +170,7 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
     try {
       await saveEditedMessages();
       const response = await fetch("/api/messages/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ preparedIds: prepared.map(item => item.id), excludedIds: excluded, channel }) });
-      const data = await response.json();
+      const data = await readApiResponse(response);
       if (response.status === 409 && data.activeSession) { setConflictSession(data.activeSession); return; }
       if (!response.ok) throw new Error(data.error || "Could not start the send session.");
       setSessionId(data.sessionId);
@@ -143,7 +190,7 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
   async function sessionAction(action: "CONFIRM" | "OPEN_ANYWAY" | "NOT_WORKING" | "DISCARD") {
     if (!sessionId) return;
     const response = await fetch(`/api/send-sessions/${sessionId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) });
-    const data = await response.json();
+    const data = await readApiResponse(response);
     if (!response.ok) { setNotice(data.error || "Could not update the send session."); return; }
     if (action === "DISCARD") { setQueue([]); setCursor(0); setSessionId(""); setSetupOpen(false); localStorage.removeItem("attendance-active-send"); return; }
     setSetupOpen(false);
@@ -153,7 +200,7 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
   async function updateCurrent(status: "OPENED" | "SENT_BY_USER" | "SKIPPED" | "FAILED", advance = false) {
     if (!current || !sessionId) return;
     const response = await fetch(`/api/send-sessions/${sessionId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "PROGRESS", logId: current.id, status, mode: current.channel === "WHATSAPP" ? (/Android|iPhone|iPad/i.test(navigator.userAgent) ? "whatsapp-phone" : "whatsapp-web") : mode, advance }) });
-    const data = await response.json();
+    const data = await readApiResponse(response);
     if (!response.ok) { setNotice(data.error || "Could not save send progress."); return; }
     await loadSession(sessionId);
     if (data.sessionStatus === "COMPLETED") { setNotice("Send queue complete. Delivery status is based on the actions you confirmed."); localStorage.removeItem("attendance-active-send"); }
@@ -165,7 +212,7 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
     if (target) reusedWindow.current = target;
     if (!bypassCheck) {
       const response = await fetch(`/api/send-sessions/${sessionId}`, { cache: "no-store" });
-      const state = await response.json();
+      const state = await readApiResponse(response);
       if (!response.ok) { target?.close(); setNotice(state.error || "Could not verify the sending session."); return; }
       if (!state.connectionConfirmed) {
         target?.close();
@@ -214,7 +261,14 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
   async function editPrepared(message: Prepared, text: string) {
     setPrepared(rows => rows.map(row => row.id === message.id ? { ...row, text } : row));
     const response = await fetch(`/api/messages/prepared/${message.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
-    if (!response.ok) setNotice("Could not save this message edit.");
+    if (!response.ok) {
+      let reason = `Could not save ${message.name}'s edit (HTTP ${response.status}).`;
+      try { const data = await readApiResponse(response); reason = data.error || reason; } catch (error) { if (error instanceof Error) reason = error.message; }
+      setNotice(reason);
+      return false;
+    }
+    setDirtyPrepared(value => value.filter(id => id !== message.id));
+    return true;
   }
 
   async function editQueue(message: Queue, text: string) {
@@ -226,7 +280,7 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
   async function copy(value: string, label: string) { try { await navigator.clipboard.writeText(value); setCopied(`${label} copied`); } catch { setCopied("Select and copy the text manually"); } }
 
   return <div className="message-workflow">
-    {isHod && <details className="send-debug-disclosure"><summary>Debug message preview and URLs</summary>{prepared.map(message => <article key={message.id}><b>{message.name} · {message.channel}</b><p>Attendance: {message.avgAtt === null ? "No data" : `${message.avgAtt}%`} · {message.attendanceSource} · {message.statusLabel}</p><label>Exact text<textarea readOnly rows={5} value={message.text}/></label>{message.toNumber && <><label>SMS URL<code>{buildSmsUrl(message.toNumber, message.text, "android")}</code></label><label>WhatsApp URL<code>{buildWhatsAppUrl(message.toNumber, message.text, "desktop")}</code></label></>}</article>)}</details>}
+    {isHod && <details className="send-debug-disclosure" onToggle={event => setDebugOpen(event.currentTarget.open)}><summary>Debug message preview and URLs</summary>{debugOpen && prepared.map(message => <article key={message.id}><b>{message.name} · {message.channel}</b><p>Attendance: {message.avgAtt === null ? "No data" : `${message.avgAtt}%`} · {message.attendanceSource} · {message.statusLabel}</p><label>Exact text<textarea readOnly rows={5} value={message.text}/></label>{message.toNumber && <><label>SMS URL<code>{buildSmsUrl(message.toNumber, message.text, "android")}</code></label><label>WhatsApp URL<code>{buildWhatsAppUrl(message.toNumber, message.text, "desktop")}</code></label></>}</article>)}</details>}
     <div className="message-send-toolbar">
       <label><input type="checkbox" checked={allVisibleSelected} onChange={event => setSelected(value => event.target.checked ? [...new Set([...value, ...visibleStudents.map(student => student.id)])] : value.filter(id => !visibleStudents.some(student => student.id === id)))}/> Select all shown students</label>
       <input aria-label="Filter students" placeholder="Filter by name or registration" value={filter} onChange={event => setFilter(event.target.value)}/>
@@ -243,18 +297,20 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
       <p><strong>{testMode ? `TEST MODE: everything goes to ${testNumber || "test number not set"}` : `Parents' numbers: ${ready.length} students`}</strong></p>
       {testMode && <p className="message-test-badge">TEST MODE · test number receives every message</p>}
       {preparationMs !== null && <p role="status">Prepared {prepared.length} messages in {preparationMs} ms</p>}
-      {loading && <div className="send-preparation-skeleton" aria-label="Preparing selected messages"><i/><i/><i/></div>}
-      {!loading && <>
+      {preparing && <div className="send-preparation-status" role="status" aria-live="polite"><div><b>Preparing {channel === "SMS" ? "SMS" : "WhatsApp"} messages</b><span>{prepareProgress?.prepared ?? 0} messages ready · {prepareProgress?.processed ?? 0} of {prepareProgress?.total ?? selected.length} students checked</span></div><progress value={prepareProgress?.processed ?? 0} max={Math.max(prepareProgress?.total ?? selected.length, 1)} /><small>Building personalized message text…</small></div>}
+      {!preparing && <>
         {missing.length > 0 && <aside className="send-excluded-list"><b>Excluded · missing or invalid parent number</b>{missing.map(student => <span key={student.id}>{student.name} · {student.regNo} — no valid parent number</span>)}</aside>}
         {prepared.map(message => <article className="send-prepared-item" key={message.id}>
           <header><div><b>{message.name}</b><small>{message.regNo} · {message.toNumber ? `+${message.toNumber}` : message.excludeReason || "No valid parent number"}</small></div><span>{message.avgAtt === null ? "No data" : `${message.avgAtt}%`} · {message.statusLabel}</span></header>
-          <textarea aria-label={`Message for ${message.name}`} rows={5} readOnly={!editingPrepared.includes(message.id)} value={message.text} onChange={event => setPrepared(rows => rows.map(row => row.id === message.id ? { ...row, text: event.target.value } : row))}/>
-          <div className="prepared-message-actions"><button type="button" className="message-action-secondary" onClick={() => { if (editingPrepared.includes(message.id)) { void editPrepared(message, message.text); setEditingPrepared(value => value.filter(id => id !== message.id)); } else setEditingPrepared(value => [...value, message.id]); }}>{editingPrepared.includes(message.id) ? "Save edit" : "Edit"}</button><button type="button" className="message-action-secondary" onClick={() => setExcluded(value => value.includes(message.id) ? value.filter(id => id !== message.id) : [...value, message.id])}>{excluded.includes(message.id) ? "Include" : "Exclude"}</button></div>
+          {expandedPrepared.includes(message.id) || editingPrepared.includes(message.id)
+            ? <textarea aria-label={`Message for ${message.name}`} rows={5} readOnly={!editingPrepared.includes(message.id)} value={message.text} onChange={event => { const text = event.target.value; setPrepared(rows => rows.map(row => row.id === message.id ? { ...row, text } : row)); setDirtyPrepared(value => value.includes(message.id) ? value : [...value, message.id]); }}/>
+            : <p className="prepared-message-snippet">{message.text.slice(0, 220)}{message.text.length > 220 ? "…" : ""}</p>}
+          <div className="prepared-message-actions"><button type="button" className="message-action-secondary" onClick={() => setExpandedPrepared(value => value.includes(message.id) ? value.filter(id => id !== message.id) : [...value, message.id])}>{expandedPrepared.includes(message.id) ? "Hide preview" : "Preview message"}</button><button type="button" className="message-action-secondary" onClick={() => { if (editingPrepared.includes(message.id)) { void (async () => { if (await editPrepared(message, message.text)) setEditingPrepared(value => value.filter(id => id !== message.id)); })(); } else { setExpandedPrepared(value => value.includes(message.id) ? value : [...value, message.id]); setEditingPrepared(value => [...value, message.id]); } }}>{editingPrepared.includes(message.id) ? "Save edit" : "Edit"}</button><button type="button" className="message-action-secondary" onClick={() => setExcluded(value => value.includes(message.id) ? value.filter(id => id !== message.id) : [...value, message.id])}>{excluded.includes(message.id) ? "Include" : "Exclude"}</button></div>
         </article>)}
       </>}
       {channel === "SMS" && ready[0] && <small className={oversizedSms.length ? "template-counter counter-warning" : "template-counter"}>{getSmsMetrics(ready[0].text).characters} {getSmsMetrics(ready[0].text).encoding} units · {getSmsMetrics(ready[0].text).parts} SMS parts{oversizedSms.length ? ` · ${oversizedSms.length} message(s) exceed the ${MAX_SMS_PARTS}-part limit` : ""}</small>}
       {channel === "SMS" && <label>Mobile link mode<select value={mode} onChange={event => chooseMode(event.target.value)}><option value="sms-link">SMS link</option><option value="google-messages">Google Messages for web (copy and paste)</option><option value="phone">Phone</option></select></label>}
-      <div className="message-confirm-actions"><button disabled={!ready.length || loading || modeSaving || oversizedSms.length > 0} onClick={() => void startQueue()} className="message-action-primary">{loading ? "Preparing…" : modeSaving ? "Saving mode…" : "Start sending"}</button><button onClick={() => { setChannel(null); setReview(false); setPrepared([]); setExcluded([]); }} className="message-action-secondary">Cancel</button></div>
+      <div className="message-confirm-actions"><button disabled={!ready.length || loading || modeSaving || oversizedSms.length > 0 || editingPrepared.length > 0 || dirtyPrepared.length > 0} onClick={() => void startQueue()} className="message-action-primary">{loading ? "Preparing…" : modeSaving ? "Saving mode…" : editingPrepared.length || dirtyPrepared.length ? "Save edits before sending" : "Start sending"}</button><button onClick={() => { setChannel(null); setReview(false); setPrepared([]); setExcluded([]); setDirtyPrepared([]); setEditingPrepared([]); }} className="message-action-secondary">Cancel</button></div>
     </section>}
 
     {conflictSession && <aside className="send-setup-dialog"><b>Unfinished send found</b><p>{conflictSession.sectionName} · {conflictSession.channel}</p><button onClick={() => { void loadSession(conflictSession.id); setConflictSession(null); }}>Resume old send</button><button onClick={async () => { await fetch(`/api/send-sessions/${conflictSession.id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "DISCARD" }) }); setConflictSession(null); }}>Discard old send</button></aside>}

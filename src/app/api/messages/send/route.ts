@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import type { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { currentUser } from "@/lib/auth";
@@ -23,7 +25,7 @@ export async function POST(request: Request) {
   const ids = [...new Set(parsed.data.preparedIds)];
   const messages = await db.preparedMessage.findMany({ where: { id: { in: ids }, senderId: sender.id, channel: parsed.data.channel }, include: { student: { include: { section: true } } } });
   if (messages.length !== ids.length) return NextResponse.json({ error: "Prepared messages must belong to your account" }, { status: 403 });
-  if (messages.some(message => message.status === "SENT" || message.status === "OPENED")) return NextResponse.json({ error: "One or more selected messages were already opened or sent" }, { status: 409 });
+  if (messages.some(message => message.status === "SENT" || message.status === "OPENED")) return NextResponse.json({ error: "This preview is out of date. Prepare the selected messages again before starting a new send." }, { status: 409 });
   if (messages.some(message => !canSendForSection(sender.role, sender.canSend, sender.sectionId, message.student.sectionId))) return NextResponse.json({ error: "One or more students are outside your permitted section" }, { status: 403 });
   const sectionIds = [...new Set(messages.map(message => message.student.sectionId))];
   if (sectionIds.length !== 1) return NextResponse.json({ error: "Start one send session per section." }, { status: 400 });
@@ -55,20 +57,25 @@ export async function POST(request: Request) {
     const session = await tx.sendSession.create({ data: { userId: sender.id, sectionId, channel: parsed.data.channel, mobileLinkMode: sender.mobileLinkMode, activeKey: `${sender.id}:${parsed.data.channel}`, status: connectionConfirmed ? "IN_PROGRESS" : "PREPARED", currentIndex: 0, testMode } });
     const batch = await tx.messageBatch.create({ data: { sectionId, sentById: sender.id, senderName: sender.name, channels: parsed.data.channel, total: queued.length, testMode } });
     const logIds = new Map<string, string>();
+    const logs: Prisma.MessageLogCreateManyInput[] = [];
+    const sessionItems: Prisma.SendSessionItemCreateManyInput[] = [];
     for (const [order, entry] of entries.entries()) {
       const { message } = entry;
       if (entry.reason || !entry.toNumber) {
-        await tx.sendSessionItem.create({ data: { sessionId: session.id, studentId: message.studentId, preparedMessageId: message.id, order, status: "EXCLUDED" } });
+        sessionItems.push({ sessionId: session.id, studentId: message.studentId, preparedMessageId: message.id, order, status: "EXCLUDED" });
         continue;
       }
-      const log = await tx.messageLog.create({ data: { batchId: batch.id, studentId: message.studentId, sentById: sender.id, senderName: sender.name, channel: message.channel, status: "QUEUED", mode: "pending", listDate: message.listDate, toNumber: entry.toNumber, text: message.text } });
-      await tx.sendSessionItem.create({ data: { sessionId: session.id, studentId: message.studentId, preparedMessageId: message.id, messageLogId: log.id, order, status: "PENDING" } });
-      logIds.set(message.id, log.id);
+      const logId = randomUUID();
+      logs.push({ id: logId, batchId: batch.id, studentId: message.studentId, sentById: sender.id, senderName: sender.name, channel: message.channel, status: "QUEUED", mode: "pending", listDate: message.listDate, toNumber: entry.toNumber, text: message.text });
+      sessionItems.push({ sessionId: session.id, studentId: message.studentId, preparedMessageId: message.id, messageLogId: logId, order, status: "PENDING" });
+      logIds.set(message.id, logId);
     }
+    if (logs.length) await tx.messageLog.createMany({ data: logs });
+    if (sessionItems.length) await tx.sendSessionItem.createMany({ data: sessionItems });
     const initialState = initialSendState(connectionConfirmed, entries.map(entry => entry.reason ? "EXCLUDED" : "PENDING"));
     await tx.sendSession.update({ where: { id: session.id }, data: initialState });
     return { sessionId: session.id, logIds };
-   });
+   }, { maxWait: 10_000, timeout: 30_000 });
   } catch (error) {
     if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
       const existing = await db.sendSession.findUnique({ where: { activeKey: `${sender.id}:${parsed.data.channel}` }, include: { section: { select: { name: true } } } });
