@@ -8,7 +8,7 @@ export type AttendanceRecord = {
   lowSubjectCount?: number | null;
 };
 export type EffectiveAttendance = { pct: number | null; source: "LIST" | "ROSTER" | "NONE"; listDate: Date | string | null };
-export type StudentStatus = "Detained" | "Below 75% (roster)" | `AVG OK (low in ${number} subjects)` | "On track" | "No data";
+export type StudentStatus = "Detained" | `AVG OK (low in ${number} subjects)` | "On track" | "No data";
 
 export function getEffectiveAttendance(student: AttendanceRecord): EffectiveAttendance {
   const inLatestList = student.avgAtt !== null && student.lastListDate !== null;
@@ -26,7 +26,7 @@ export function getStatus(student: AttendanceRecord, threshold = DEFAULT_ATTENDA
     if (lowSubjectCount > 0) return `AVG OK (low in ${lowSubjectCount} subjects)`;
     return "On track";
   }
-  return attendance.pct < threshold ? "Below 75% (roster)" : "On track";
+  return attendance.pct < threshold ? "Detained" : "On track";
 }
 
 export function attendanceSourceLabel(attendance: EffectiveAttendance) {

@@ -20,7 +20,7 @@ export default async function Dashboard() {
     db.preparedMessage.count({ where: { senderId: user.id, status: "READY" } }),
   ]);
   const students = studentRows.length;
-  const detained = studentRows.filter(student => ["Detained", "Below 75% (roster)"].includes(getStatus(student, DEFAULT_ATTENDANCE_THRESHOLD))).length;
+  const detained = studentRows.filter(student => ["Detained"].includes(getStatus(student, DEFAULT_ATTENDANCE_THRESHOLD))).length;
   const stats = [
     { label: "Total students", value: students, icon: GraduationCap, accent: "teal", foot: "Across all sections" },
     { label: "Need follow-up", value: detained, icon: UserRoundCheck, accent: "rose", foot: "Attendance below threshold" },

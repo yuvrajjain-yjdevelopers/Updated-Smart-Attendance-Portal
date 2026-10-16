@@ -42,7 +42,7 @@ export default function StudentsBySection({ sections, senderName }: { sections: 
   const pageSize = 50;
   const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
   const visible = filtered.slice(page * pageSize, (page + 1) * pageSize);
-  const eligible = rows.filter(student => ["Detained", "Below 75% (roster)"].includes(student.attendanceStatus));
+  const eligible = rows.filter(student => ["Detained"].includes(student.attendanceStatus));
   const missing = rows.filter(student => !student.parentMobile).length;
 
   return <section className="directory-card">
@@ -59,7 +59,7 @@ export default function StudentsBySection({ sections, senderName }: { sections: 
             {loading && <tr><td colSpan={7} className="empty-row">Loading this section…</td></tr>}{!loading && !visible.length && <tr><td colSpan={7} className="empty-row">No students match this view.</td></tr>}
           </tbody></table></div>
           {filtered.length > pageSize && <nav className="directory-pagination" aria-label="Student pages"><span>Page {page + 1} of {pageCount}</span><button type="button" disabled={page === 0} onClick={() => setPage(current => current - 1)}>Previous</button><button type="button" disabled={page + 1 >= pageCount} onClick={() => setPage(current => current + 1)}>Next</button></nav>}
-        </> : <div className="section-messaging"><p className="muted-note">Only students classified as Detained or Below 75% (roster) are included.</p><ClassMessaging students={eligible.map(student => ({ id: student.id, name: student.name, regNo: student.regNo, parentMobile: student.parentMobile, avgAtt: student.effectiveAttendance, isDetained: student.attendanceStatus === "Detained", statusLabel: student.attendanceStatus, attendanceSourceLabel: student.attendanceSourceLabel }))} senderName={senderName} canSend isHod/></div>}
+        </> : <div className="section-messaging"><p className="muted-note">Only students below the attendance threshold are included.</p><ClassMessaging students={eligible.map(student => ({ id: student.id, name: student.name, regNo: student.regNo, parentMobile: student.parentMobile, avgAtt: student.effectiveAttendance, isDetained: student.attendanceStatus === "Detained", statusLabel: student.attendanceStatus, attendanceSourceLabel: student.attendanceSourceLabel }))} senderName={senderName} canSend isHod/></div>}
       </>}
     </>}
   </section>;

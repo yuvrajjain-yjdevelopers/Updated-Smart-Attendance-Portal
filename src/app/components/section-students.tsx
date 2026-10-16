@@ -18,6 +18,7 @@ type Student = {
   attendanceSource: "LIST" | "ROSTER" | "NONE";
   attendanceSourceLabel: string;
   attendanceStatus: string;
+  attendanceThreshold: number;
   lowSubjectCount: number;
 };
 type Draft = {
@@ -30,7 +31,8 @@ type Draft = {
 };
 const blank: Draft = { regNo: "", name: "", parentMobile: "", studentMobile: "", branch: "", totalAttendancePct: "" };
 
-export default function SectionStudents({ sectionId }: { sectionId: string }) {
+export default function SectionStudents({ sectionId, mode = "hod" }: { sectionId: string; mode?: "hod" | "teacher" }) {
+  const isHod = mode === "hod";
   const [rows, setRows] = useState<Student[]>([]);
   const [draft, setDraft] = useState<Draft>(blank);
   const [editing, setEditing] = useState("");
@@ -38,6 +40,7 @@ export default function SectionStudents({ sectionId }: { sectionId: string }) {
   const [missing, setMissing] = useState(false);
   const [sort, setSort] = useState<"regNo" | "name">("regNo");
   const [page, setPage] = useState(0);
+  const [attendanceDrafts, setAttendanceDrafts] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState("");
   const [paste, setPaste] = useState("");
   const [preview, setPreview] = useState<Draft[] | null>(null);
@@ -84,12 +87,44 @@ export default function SectionStudents({ sectionId }: { sectionId: string }) {
       });
       const data = await response.json();
       if (!response.ok) { setNotice(data.error || "Could not save this student."); return; }
+      if (editing) setAttendanceDrafts(current => { const next = { ...current }; delete next[editing]; return next; });
       setDraft(blank);
       setEditing("");
       setNotice(editing ? "Student updated." : "Student added.");
       await load();
     } catch {
       setNotice("Could not save this student. Check the connection and try again.");
+    } finally { setBusy(false); }
+  }
+
+  async function saveAttendance(student: Student) {
+    const raw = attendanceDrafts[student.id] ?? student.totalAttendancePct?.toString() ?? "";
+    const attendance = raw.trim() === "" ? null : Number(raw);
+    if (attendance !== null && (!Number.isFinite(attendance) || attendance < 0 || attendance > 100)) {
+      setNotice("Attendance must be between 0 and 100.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const response = await fetch(`/api/sections/${sectionId}/students/${student.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          regNo: student.regNo,
+          name: student.name,
+          parentMobile: student.parentMobile,
+          studentMobile: student.studentMobile || "",
+          branch: student.branch || "",
+          totalAttendancePct: attendance,
+        }),
+      });
+      const data = await response.json();
+      if (!response.ok) { setNotice(data.error || "Could not update attendance."); return; }
+      setAttendanceDrafts(current => { const next = { ...current }; delete next[student.id]; return next; });
+      setNotice(`Attendance updated for ${student.name}.`);
+      await load();
+    } catch {
+      setNotice("Could not update attendance. Check the connection and try again.");
     } finally { setBusy(false); }
   }
 
@@ -166,27 +201,27 @@ export default function SectionStudents({ sectionId }: { sectionId: string }) {
   return (
     <section className="section-students-panel">
       <div className="section-roster-heading">
-        <div><span className="eyebrow">STUDENT ROSTER</span><h2>Students <span>{rows.length}</span></h2><p>{rows.filter(student => !student.parentMobile).length} missing parent mobile · {rows.filter(student => student.attendanceStatus === "Detained" || student.attendanceStatus.startsWith("Below 75%")).length} below threshold</p></div>
-        <a href="/students_template.csv" download className="section-template-link">Download student template ↓</a>
+        <div><span className="eyebrow">STUDENT ROSTER</span><h2>Students <span>{rows.length}</span></h2><p>{rows.filter(student => !student.parentMobile).length} missing parent mobile · {rows.filter(student => student.attendanceStatus === "Detained" || student.attendanceStatus.startsWith("Below 75%")).length} below threshold</p><p>Type a roster percentage in the Attendance cell and press Save or Enter. If a detention list is applied, its list attendance remains the effective value.</p></div>
+        {isHod && <a href="/students_template.csv" download className="section-template-link">Download student template ↓</a>}
       </div>
 
-      <form className="section-student-form" onSubmit={event => { event.preventDefault(); void save(); }}>
+      {(isHod || editing) && <form className="section-student-form" onSubmit={event => { event.preventDefault(); void save(); }}>
         <label>Registration number<input required value={draft.regNo} onChange={event => setDraft({ ...draft, regNo: event.target.value })} placeholder="e.g. CS2401" /></label>
         <label>Student name<input required value={draft.name} onChange={event => setDraft({ ...draft, name: event.target.value })} placeholder="Full name" /></label>
         <label>Parent mobile<input value={draft.parentMobile} onChange={event => setDraft({ ...draft, parentMobile: event.target.value })} placeholder="Optional" /></label>
         <label>Student mobile<input value={draft.studentMobile} onChange={event => setDraft({ ...draft, studentMobile: event.target.value })} placeholder="Optional" /></label>
         <label>Branch<input value={draft.branch} onChange={event => setDraft({ ...draft, branch: event.target.value })} placeholder="e.g. Computer Science" /></label>
-        <label>Attendance %<input type="number" min="0" max="100" step="0.01" value={draft.totalAttendancePct} onChange={event => setDraft({ ...draft, totalAttendancePct: event.target.value })} placeholder="Optional" /></label>
+        <label>Roster attendance %<input type="number" min="0" max="100" step="0.01" value={draft.totalAttendancePct} onChange={event => setDraft({ ...draft, totalAttendancePct: event.target.value })} placeholder="Optional" /></label>
         <div className="section-form-actions"><button type="submit" className="section-action-primary" disabled={busy}>{busy ? "Saving…" : editing ? "Update student" : "Add student"}</button>{editing && <button type="button" className="section-action-secondary" onClick={() => { setEditing(""); setDraft(blank); }}>Cancel edit</button>}</div>
-      </form>
+      </form>}
 
-      <div className="section-import-grid">
+      {isHod && <div className="section-import-grid">
         <section className="section-import-card"><div><h3>Import a student file</h3><p>Upload a CSV or XLSX list assigned to Section {sectionId}.</p></div><label className="section-file-picker"><input type="file" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" disabled={busy} onChange={event => { const file = event.target.files?.[0]; if (file) void importFile(file); }} /><span>Choose CSV or XLSX</span><small>Files are validated before saving.</small></label></section>
         <section className="section-import-card"><div><h3>Paste rows from Excel</h3><p>Columns: registration, name, parent mobile, student mobile, branch, attendance.</p></div><textarea value={paste} onChange={event => setPaste(event.target.value)} placeholder="Paste tab-separated cells here" rows={3} /><div className="section-import-actions"><button type="button" className="section-action-secondary" onClick={parsePaste} disabled={!paste.trim()}>Preview pasted rows</button>{preview && <button type="button" className="section-action-primary" onClick={() => void importPaste()} disabled={busy}>Import {preview.length} rows</button>}</div>{preview && <p className="section-preview-note">Preview: {preview.slice(0, 5).map(row => `${row.regNo} · ${row.name}`).join(" / ")}{preview.length > 5 ? ` · +${preview.length - 5} more` : ""}</p>}</section>
-      </div>
+      </div>}
 
       <div className="section-roster-tools"><input aria-label="Search students" value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} placeholder="Search by name or registration" /><label><input type="checkbox" checked={missing} onChange={event => { setMissing(event.target.checked); setPage(0); }} /> Parent mobile missing</label><select aria-label="Sort students" value={sort} onChange={event => { setSort(event.target.value as "regNo" | "name"); setPage(0); }}><option value="regNo">Sort by registration</option><option value="name">Sort by name</option></select><span>Showing {pageRows.length} of {visible.length}</span></div>
-        <div className="section-student-table-wrap"><table className="section-student-table"><thead><tr><th>Registration</th><th>Student</th><th>Parent mobile</th><th>Attendance</th><th>Status and subjects</th><th>Actions</th></tr></thead><tbody>{pageRows.map(student => {const subjects=parseDetainedSubjects(student.detainedSubjects);return <tr key={student.id}><td className="section-reg-cell">{student.regNo}</td><td className="section-name-cell">{student.name}</td><td>{student.parentMobile || <span className="missing-pill">Missing</span>}</td><td>{student.effectiveAttendance===null?"—":`${student.effectiveAttendance}%`} {student.attendanceSourceLabel&&<small className="attendance-source-tag">{student.attendanceSourceLabel}</small>}</td><td><span className={student.attendanceStatus==="Detained"||student.attendanceStatus.startsWith("Below 75%")?"detained-pill":"ok-pill"}>{student.attendanceStatus}</span>{student.attendanceSource==="LIST"&&subjects.map(subject=><span className="subject-code-name" key={subject.code}>{subject.code} · {subject.name}</span>)}</td><td><div className="section-row-actions"><button type="button" onClick={() => { setEditing(student.id); setDraft({ regNo: student.regNo, name: student.name, parentMobile: student.parentMobile, studentMobile: student.studentMobile || "", branch: student.branch || "", totalAttendancePct: student.totalAttendancePct?.toString() || "" }); }}>Edit</button><button type="button" disabled={busy} onClick={() => void remove(student)}>Delete</button></div></td></tr>})}{pageRows.length === 0 && <tr><td colSpan={6} className="section-roster-empty">No students match this view.</td></tr>}</tbody></table></div>
+      <div className="section-student-table-wrap"><table className="section-student-table"><thead><tr><th>Registration</th><th>Student</th><th>Parent mobile</th><th>Attendance</th><th>Status and subjects</th><th>Actions</th></tr></thead><tbody>{pageRows.map(student => {const subjects=parseDetainedSubjects(student.detainedSubjects);const rosterValue=attendanceDrafts[student.id]??student.totalAttendancePct?.toString()??"";const unchanged=rosterValue===(student.totalAttendancePct?.toString()??"");const typedAttendance=rosterValue.trim()===""?null:Number(rosterValue);const hasValidTypedAttendance=typedAttendance!==null&&Number.isFinite(typedAttendance)&&typedAttendance>=0&&typedAttendance<=100;const previewStatus=unchanged?student.attendanceStatus:!hasValidTypedAttendance?"No data":student.attendanceSource==="LIST"?student.attendanceStatus:typedAttendance!<student.attendanceThreshold?"Detained":"On track";const previewSource=unchanged?student.attendanceSourceLabel:hasValidTypedAttendance&&student.attendanceSource==="LIST"?student.attendanceSourceLabel:"Roster";return <tr key={student.id}><td className="section-reg-cell">{student.regNo}</td><td className="section-name-cell">{student.name}</td><td>{student.parentMobile || <span className="missing-pill">Missing</span>}</td><td><div className="attendance-inline-editor"><input aria-label={`Roster attendance for ${student.name}`} type="number" min="0" max="100" step="0.01" value={rosterValue} placeholder="—" onChange={event=>setAttendanceDrafts(current=>({...current,[student.id]:event.target.value}))} onKeyDown={event=>{if(event.key==="Enter"){event.preventDefault();void saveAttendance(student)}}}/><span>%</span><button type="button" disabled={busy||unchanged} onClick={()=>void saveAttendance(student)}>Save</button></div><small className="attendance-current-value">Current: {student.effectiveAttendance===null?"No data":`${student.effectiveAttendance}%`} {student.attendanceSourceLabel&&<span className="attendance-source-tag">{student.attendanceSourceLabel}</span>}</small></td><td><span className={previewStatus==="Detained"?"detained-pill":"ok-pill"}>{previewStatus}</span>{previewSource&&<span className="attendance-source-tag">{previewSource}</span>}{student.attendanceSource==="LIST"&&subjects.map(subject=><span className="subject-code-name" key={subject.code}>{subject.code} · {subject.name}</span>)}</td><td><div className="section-row-actions"><button type="button" onClick={() => { setEditing(student.id); setDraft({ regNo: student.regNo, name: student.name, parentMobile: student.parentMobile, studentMobile: student.studentMobile || "", branch: student.branch || "", totalAttendancePct: student.totalAttendancePct?.toString() || "" }); }}>Edit</button>{isHod&&<button type="button" disabled={busy} onClick={() => void remove(student)}>Delete</button>}</div></td></tr>})}{pageRows.length === 0 && <tr><td colSpan={6} className="section-roster-empty">No students match this view.</td></tr>}</tbody></table></div>
       {visible.length > pageSize && <nav className="directory-pagination" aria-label="Roster pages"><span>Page {page + 1} of {pageCount}</span><button type="button" disabled={page === 0} onClick={() => setPage(current => current - 1)}>Previous</button><button type="button" disabled={page + 1 >= pageCount} onClick={() => setPage(current => current + 1)}>Next</button></nav>}
       {notice && <p role="status" className="section-roster-notice">{notice}</p>}
     </section>

@@ -43,7 +43,7 @@ export default async function SectionPage({ params }: { params: Promise<{ id: st
     const attendance = getEffectiveAttendance(student);
     const statusLabel = getStatus(student, threshold);
     return { ...student, avgAtt: attendance.pct, isDetained: statusLabel === "Detained", statusLabel, attendanceSourceLabel: attendanceSourceLabel(attendance), detainedSubjects: attendance.source === "LIST" ? parseDetainedSubjects(student.detainedSubjects) : [] };
-  }).filter(student => student.statusLabel === "Detained" || student.statusLabel === "Below 75% (roster)");
+  }).filter(student => student.statusLabel === "Detained");
   const readyToSend = await db.preparedMessage.count({ where: { senderId: user.id, student: { sectionId: id }, status: "READY" } });
 
   return (

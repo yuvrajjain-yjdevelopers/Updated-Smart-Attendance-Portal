@@ -45,7 +45,7 @@ export async function regeneratePreparedMessages(sectionId?: string, senderOnlyI
   ]);
   const settings = Object.fromEntries(settingRows.map(x => [x.key, x.value]));
   const threshold = Number(settings.attendanceThreshold || settings.threshold || DEFAULT_ATTENDANCE_THRESHOLD);
-  const eligibleStudents = allStudents.filter(student => ["Detained", "Below 75% (roster)"].includes(getStatus(student, threshold)));
+  const eligibleStudents = allStudents.filter(student => ["Detained"].includes(getStatus(student, threshold)));
   const senderIds = senders.map(sender => sender.id);
   const existingRows = senderIds.length ? await db.preparedMessage.findMany({
     where: { senderId: { in: senderIds }, ...(sectionId ? { student: { sectionId } } : {}) },
@@ -96,7 +96,7 @@ export async function ensurePreparedForSender(senderId: string, sectionId?: stri
   const threshold = Number(settings.attendanceThreshold || settings.threshold || DEFAULT_ATTENDANCE_THRESHOLD);
   const expected = new Set<string>();
   for (const student of students) {
-    if (!["Detained", "Below 75% (roster)"].includes(getStatus(student, threshold))) continue;
+    if (!["Detained"].includes(getStatus(student, threshold))) continue;
     expected.add(`${student.id}:SMS`);
     expected.add(`${student.id}:WHATSAPP`);
   }
