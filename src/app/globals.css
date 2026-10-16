@@ -74,6 +74,15 @@ button { cursor:pointer; }
 .directory-table td{padding:14px;color:#52667a}
 .directory-table .student-name-cell{font-size:13px}
 .missing-pill,.detained-pill,.ok-pill{padding:5px 9px;font-size:10px}
+.directory-attendance-editor{display:flex;align-items:center;gap:5px;min-width:150px}
+.directory-attendance-editor input{width:72px;min-width:0;height:32px;border:1px solid #dce5eb;border-radius:7px;background:#fff;padding:4px 7px;color:#334a60;font-size:13px}
+.directory-attendance-editor input:focus{border-color:#71bfb3;outline:0;box-shadow:0 0 0 3px rgba(27,147,131,.09)}
+.directory-attendance-editor>span{color:#748696;font-size:12px}
+.directory-attendance-editor button{border:1px solid #cfe3de;border-radius:7px;background:#f1f8f6;padding:6px 8px;color:#18776d;font-size:11px;font-weight:700}
+.directory-attendance-editor button:disabled{cursor:not-allowed;opacity:.45}
+.directory-attendance-effective,.directory-attendance-note{display:block;margin-top:5px;color:#7d8c98;font-size:10px;white-space:normal}
+.directory-attendance-note{max-width:190px;color:#927031}
+.directory-attendance-notice{margin:12px 0 0;border:1px solid #d8ebe6;border-radius:9px;background:#f1faf7;padding:10px 12px;color:#247569;font-size:12px}
 
 /* Section management */
 .sections-page{display:grid;max-width:1440px;margin:0 auto;gap:19px}
