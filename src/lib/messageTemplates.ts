@@ -13,9 +13,9 @@ export const DEFAULT_SMS_TEMPLATES: Record<MessageLanguage, string> = {
 };
 
 export const DEFAULT_WHATSAPP_TEMPLATES: Record<MessageLanguage, string> = {
-  en: "Dear Parent,\n\nName: {student_name}\nReg No: {reg_no}\nSection: {section}\nAttendance: {avg}%\n{?subjects}Detained subjects:\n{subjects}\n\n{/subjects}Please contact {sender_name} ({sender_mobile}).\n\nRegards,\n{sender_name}, {department}\n{college_name}",
-  hi: "प्रिय अभिभावक,\n\nविद्यार्थी: {student_name}\nपंजीकरण नंबर: {reg_no}\nसेक्शन: {section}\nउपस्थिति: {avg}%\n{?subjects}कम उपस्थिति वाले विषय:\n{subjects}\n\n{/subjects}कृपया {sender_name} ({sender_mobile}) से संपर्क करें।\n\nसादर,\n{sender_name}, {department}\n{college_name}",
-  mr: "प्रिय पालक,\n\nविद्यार्थी: {student_name}\nनोंदणी क्रमांक: {reg_no}\nविभाग: {section}\nउपस्थिती: {avg}%\n{?subjects}कमी उपस्थितीचे विषय:\n{subjects}\n\n{/subjects}कृपया {sender_name} ({sender_mobile}) यांच्याशी संपर्क साधा.\n\nआपला,\n{sender_name}, {department}\n{college_name}",
+  en: "Dear Parent,\n\nName: {student_name}\nReg No: {reg_no}\nSection: {section}\nAttendance: {avg}% (below 75%)\nPlease contact {sender_name} ({sender_mobile}).\n\nRegards,\n{sender_name}, {department}\n{college_name}",
+  hi: "प्रिय अभिभावक,\n\nविद्यार्थी: {student_name}\nपंजीकरण नंबर: {reg_no}\nसेक्शन: {section}\nउपस्थिति: {avg}% (75% से कम)\nकृपया {sender_name} ({sender_mobile}) से संपर्क करें।\n\nसादर,\n{sender_name}, {department}\n{college_name}",
+  mr: "प्रिय पालक,\n\nविद्यार्थी: {student_name}\nनोंदणी क्रमांक: {reg_no}\nविभाग: {section}\nउपस्थिती: {avg}% (75% पेक्षा कमी)\nकृपया {sender_name} ({sender_mobile}) यांच्याशी संपर्क साधा.\n\nआपला,\n{sender_name}, {department}\n{college_name}",
 };
 
 // Keep each complete language block in the order the sender requested.
@@ -27,7 +27,23 @@ export function getTrilingualSmsTemplate(settings: Record<string, string | undef
 }
 
 export function getTrilingualWhatsAppTemplate(settings: Record<string, string | undefined>) {
-  return settings.whatsappTemplateAllLanguages || DEFAULT_TRILINGUAL_WHATSAPP_TEMPLATE;
+  return sanitizeWhatsAppTemplate(settings.whatsappTemplateAllLanguages || DEFAULT_TRILINGUAL_WHATSAPP_TEMPLATE);
+}
+
+/** Remove old subject sections from saved templates and localize the attendance sentence. */
+export function sanitizeWhatsAppTemplate(template: string) {
+  let cleaned = template
+    .replace(/\{\?subjects\}[\s\S]*?\{\/subjects\}/gi, "")
+    .replace(/(?:Detained subjects|कम उपस्थिति वाले विषय|कमी उपस्थितीचे विषय)\s*:\s*\n?\s*\{subjects\}\s*/gi, "")
+    .replace(/^.*(?:\{subjects\}|\{detained_count\}).*$/gim, "")
+    .replace(/^\s*\{subjects\}\s*$/gim, "")
+    .replace(/\n{3,}/g, "\n\n");
+
+  // Upgrade the previously supplied wording even when it was already saved in Settings.
+  cleaned = cleaned.replace(/Attendance:\s*(?:\{avg\}%\s*)?(?:His\/Her attendance is less than 75%|below 75%)?/gi, "Attendance: {avg}% (below 75%)");
+  cleaned = cleaned.replace(/उपस्थिति:\s*(?:\{avg\}%\s*)?(?:His\/Her attendance is less than 75%|75% से कम)?/gi, "उपस्थिति: {avg}% (75% से कम)");
+  cleaned = cleaned.replace(/उपस्थिती:\s*(?:\{avg\}%\s*)?(?:His\/Her attendance is less than 75%|75% पेक्षा कमी)?/gi, "उपस्थिती: {avg}% (75% पेक्षा कमी)");
+  return cleaned.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 // Backwards-compatible English names for existing callers and saved settings.
