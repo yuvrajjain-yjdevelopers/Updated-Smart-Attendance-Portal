@@ -4,12 +4,12 @@ import { useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
-import { GraduationCap, LayoutDashboard, Layers3, LogOut, Menu, MessageSquareText, Settings2, ShieldCheck, UsersRound, X } from "lucide-react";
+import { CalendarCheck, GraduationCap, LayoutDashboard, Layers3, LogOut, Menu, MessageSquareText, Settings2, ShieldCheck, UsersRound, X } from "lucide-react";
 import { Avatar, Badge } from "@/app/components/ui";
 
 type User = { name: string; role: "HOD" | "TEACHER"; section?: string; testMode: boolean };
 type NavigationItem = { label: string; href: string };
-const iconMap = { Dashboard: LayoutDashboard, Sections: Layers3, Students: GraduationCap, Teachers: UsersRound, Messages: MessageSquareText, Settings: Settings2, "My Class": GraduationCap };
+const iconMap = { Dashboard: LayoutDashboard, Sections: Layers3, Students: GraduationCap, Teachers: UsersRound, Messages: MessageSquareText, Settings: Settings2, "My Class": GraduationCap, "Daily Attendance": CalendarCheck };
 
 export function Sidebar({ nav, path, user, open, onNavigate, onLogout }: { nav: NavigationItem[]; path: string; user: User | null; open: boolean; onNavigate: () => void; onLogout: () => void }) {
   const brandHref = user?.role === "TEACHER" ? "/my-class" : "/dashboard";
@@ -69,8 +69,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   if (path === "/login") return <>{children}</>;
   const nav: NavigationItem[] = user?.role === "HOD"
-    ? [{ label: "Dashboard", href: "/dashboard" }, { label: "Sections", href: "/sections" }, { label: "Students", href: "/students" }, { label: "Teachers", href: "/teachers" }, { label: "Messages", href: "/messages" }, { label: "Settings", href: "/settings" }]
-    : [{ label: "My Class", href: "/my-class" }, { label: "Messages", href: "/messages" }, { label: "Settings", href: "/settings" }];
+    ? [{ label: "Dashboard", href: "/dashboard" }, { label: "Sections", href: "/sections" }, { label: "Students", href: "/students" }, { label: "Teachers", href: "/teachers" }, { label: "Daily Attendance", href: "/daily-attendance" }, { label: "Messages", href: "/messages" }, { label: "Settings", href: "/settings" }]
+    : [{ label: "My Class", href: "/my-class" }, { label: "Daily Attendance", href: "/daily-attendance" }, { label: "Messages", href: "/messages" }, { label: "Settings", href: "/settings" }];
   const title = nav.find(item => item.href === path)?.label ?? nav.find(item => path.startsWith(`${item.href}/`))?.label ?? "Smart Attendance";
   async function logout() { try { await fetch("/api/auth/logout", { method: "POST" }); } finally { setMenuOpen(false); router.replace("/login"); } }
 

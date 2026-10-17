@@ -13,14 +13,13 @@ const schema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("DISCARD") }),
   z.object({ action: z.literal("PROGRESS"), logId: z.string(), status: z.enum(["OPENED", "SENT_BY_USER", "SKIPPED", "FAILED"]), mode: z.string().max(40), advance: z.boolean().optional().default(false) }),
 ]);
-const includeSession = {
-  section: { select: { name: true } },
-  items: { orderBy: { order: "asc" as const }, include: { student: true, messageLog: true, preparedMessage: true } },
-};
-
 async function loadOwnedSession(id: string, user: NonNullable<Awaited<ReturnType<typeof currentUser>>>) {
-  const session = await db.sendSession.findUnique({ where: { id }, include: includeSession });
-  return session && canAccessSendSession(user, session) ? session : null;
+  const access = await db.sendSession.findUnique({ where: { id }, select: { userId: true, sectionId: true, kind: true } });
+  if (!access || !canAccessSendSession(user, access)) return null;
+  const student = access.kind === "ABSENCE"
+    ? { id: true, name: true, regNo: true, sectionId: true }
+    : { id: true, name: true, regNo: true, sectionId: true, avgAtt: true, totalAttendancePct: true, lastListDate: true, isDetained: true, lowSubjectCount: true, detainedSubjects: true };
+  return db.sendSession.findUnique({ where: { id }, include: { section: { select: { name: true } }, items: { orderBy: { order: "asc" }, include: { student: { select: student }, messageLog: true, preparedMessage: true } } } });
 }
 
 function formatSession(session: NonNullable<Awaited<ReturnType<typeof loadOwnedSession>>>, threshold = DEFAULT_ATTENDANCE_THRESHOLD) {
@@ -29,9 +28,9 @@ function formatSession(session: NonNullable<Awaited<ReturnType<typeof loadOwnedS
     preparedId: item.preparedMessageId || "",
     name: item.student.name,
     regNo: item.student.regNo,
-    avgAtt: getEffectiveAttendance(item.student).pct,
-    attendanceSourceLabel: attendanceSourceLabel(getEffectiveAttendance(item.student)),
-    statusLabel: getStatus(item.student, threshold),
+    avgAtt: session.kind === "ABSENCE" ? null : getEffectiveAttendance(item.student as Parameters<typeof getEffectiveAttendance>[0]).pct,
+    attendanceSourceLabel: session.kind === "ABSENCE" ? "" : attendanceSourceLabel(getEffectiveAttendance(item.student as Parameters<typeof getEffectiveAttendance>[0])),
+    statusLabel: session.kind === "ABSENCE" ? "Absent" : getStatus(item.student as Parameters<typeof getStatus>[0], threshold),
     section: session.section.name,
     toNumber: item.messageLog!.toNumber,
     text: item.messageLog!.text,
@@ -41,7 +40,7 @@ function formatSession(session: NonNullable<Awaited<ReturnType<typeof loadOwnedS
   const currentOrder = session.currentIndex;
   const currentQueueIndex = queueCursorAtSavedIndex(session.items.map(item => item.status), currentOrder);
   const done = session.items.filter(item => ["SENT_BY_USER", "SKIPPED", "FAILED", "EXCLUDED"].includes(item.status)).length;
-  return { session: { id: session.id, sectionId: session.sectionId, sectionName: session.section.name, channel: session.channel, mobileLinkMode: session.mobileLinkMode, status: session.status, currentIndex: session.currentIndex, testMode: session.testMode, total: session.items.length, done }, queue, currentQueueIndex };
+  return { session: { id: session.id, sectionId: session.sectionId, sectionName: session.section.name, channel: session.channel, kind: session.kind, date: session.items.find(item => item.messageLog?.listDate)?.messageLog?.listDate?.toISOString().slice(0, 10) || null, mobileLinkMode: session.mobileLinkMode, status: session.status, currentIndex: session.currentIndex, testMode: session.testMode, total: session.items.length, done }, queue, currentQueueIndex };
 }
 
 export async function GET(_: Request, { params }: Context) {
@@ -99,7 +98,7 @@ export async function PATCH(request: Request, { params }: Context) {
     await tx.messageLog.update({ where: { id: progress.logId }, data: { status: progress.status, mode } });
     await tx.sendSessionItem.update({ where: { id: item.id }, data: { status: progress.status } });
     if (progress.status === "SENT_BY_USER" || progress.status === "SKIPPED") {
-      await tx.preparedMessage.updateMany({ where: { senderId: user.id, studentId: item.studentId, channel: session.channel }, data: { status: progress.status === "SENT_BY_USER" ? "SENT" : "SKIPPED" } });
+      await tx.preparedMessage.updateMany({ where: { senderId: user.id, studentId: item.studentId, channel: session.channel, kind: session.kind }, data: { status: progress.status === "SENT_BY_USER" ? "SENT" : "SKIPPED" } });
     }
     await tx.sendSession.update({ where: { id }, data: { currentIndex: nextIndex, status: completed ? "COMPLETED" : "IN_PROGRESS", activeKey: completed ? null : session.activeKey } });
   });

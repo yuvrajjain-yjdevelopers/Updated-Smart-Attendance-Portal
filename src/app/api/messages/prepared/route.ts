@@ -4,6 +4,9 @@ import { currentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { normalizePreparedNumber, prepareSelectedForSender } from "@/lib/preparedMessages";
 import { DEFAULT_ATTENDANCE_THRESHOLD, attendanceSourceLabel, getEffectiveAttendance, getStatus } from "@/lib/attendance";
+import { prepareAbsenceForSender } from "@/features/daily-attendance/preparation";
+import { canViewDailySection } from "@/features/daily-attendance/access";
+import { parseAttendanceDate } from "@/features/daily-attendance/date";
 
 export const dynamic = "force-dynamic";
 
@@ -13,6 +16,7 @@ type ProgressListener = (progress: Progress) => void | Promise<void>;
 async function readPreparedMessages(user: NonNullable<Awaited<ReturnType<typeof currentUser>>>, sectionId: string | undefined, studentIds: string[], channel: "SMS" | "WHATSAPP" | undefined, startedAt: number) {
   const where: Prisma.PreparedMessageWhereInput = {
     senderId: user.id,
+    kind: "DETENTION",
     ...(channel ? { channel } : {}),
     ...(studentIds.length ? { studentId: { in: studentIds } } : {}),
     ...(sectionId ? { student: { sectionId } } : user.role === "TEACHER" ? { student: { sectionId: user.sectionId || "" } } : {}),
@@ -65,6 +69,27 @@ export async function GET(request: Request) {
   const studentIds = [...new Set((params.get("studentIds") || "").split(",").filter(Boolean))];
   const channelValue = params.get("channel");
   const channel: "SMS" | "WHATSAPP" | undefined = channelValue === "SMS" || channelValue === "WHATSAPP" ? channelValue : undefined;
+  if (params.get("kind") === "ABSENCE") {
+    const dateText = params.get("date") || "";
+    const date = parseAttendanceDate(dateText);
+    const scopeSection = user.role === "TEACHER" ? user.sectionId || "" : sectionId || "";
+    if (!date || !channel || !studentIds.length || studentIds.length > 500 || !scopeSection || !canViewDailySection(user, scopeSection)) return NextResponse.json({ error: "Choose an authorized section, date, channel, and up to 500 students" }, { status: 400 });
+    try {
+      const eligibleIds = await prepareAbsenceForSender({ senderId: user.id, sectionId: scopeSection, dateText, studentIds, channel, sendAgain: params.get("sendAgain") === "1" });
+      if (!eligibleIds?.length) return NextResponse.json({ messages: [], testMode: false, testNumber: "", preparedMs: Math.round(performance.now() - startedAt) });
+      const [rows, settingRows, days] = await Promise.all([
+        db.preparedMessage.findMany({ where: { senderId: user.id, kind: "ABSENCE", channel, listDate: date, studentId: { in: eligibleIds }, student: { sectionId: scopeSection } }, select: { id: true, studentId: true, status: true, toNumber: true, text: true, student: { select: { name: true, regNo: true, section: { select: { name: true } } } } }, orderBy: [{ student: { regNo: "asc" } }] }),
+        db.setting.findMany({ where: { key: { in: ["testMode", "testNumber"] } }, select: { key: true, value: true } }),
+        db.dailyAttendanceEntry.findMany({ where: { studentId: { in: studentIds }, status: "ABSENT", dailyAttendance: { sectionId: scopeSection, isHoliday: false, date: { gte: new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1)), lt: new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1)) } } }, select: { studentId: true } }),
+      ]);
+      const settings = Object.fromEntries(settingRows.map(row => [row.key, row.value]));
+      const absentDays = new Map<string, number>();
+      for (const row of days) absentDays.set(row.studentId, (absentDays.get(row.studentId) || 0) + 1);
+      return NextResponse.json({ messages: rows.map(row => ({ id: row.id, studentId: row.studentId, name: row.student.name, regNo: row.student.regNo, avgAtt: null, attendanceSource: "NONE", attendanceSourceLabel: `absent days this month: ${absentDays.get(row.studentId) || 0}`, statusLabel: `Absent ${dateText}`, section: row.student.section.name, channel, status: row.status, toNumber: settings.testMode !== "false" ? normalizePreparedNumber(settings.testNumber || "") : row.toNumber, text: row.text, listDate: date, excludeReason: row.status === "MISSING_NUMBER" ? "Missing or invalid parent number" : null })), testMode: settings.testMode !== "false", testNumber: normalizePreparedNumber(settings.testNumber || "") || settings.testNumber || "", preparedMs: Math.round(performance.now() - startedAt) });
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : "Could not prepare absence messages." }, { status: 400 });
+    }
+  }
   if (user.role === "TEACHER" && sectionId && sectionId !== user.sectionId) return NextResponse.json({ error: "One or more students are outside your permitted section" }, { status: 403 });
   if (studentIds.length && (!channel || studentIds.length > 500)) return NextResponse.json({ error: "Select a valid channel and up to 500 students" }, { status: 400 });
   const scopeSection = user.role === "TEACHER" ? user.sectionId || "" : sectionId;

@@ -1,7 +1,11 @@
 {
   "compilerOptions": {
     "target": "ES2017",
-    "lib": ["dom", "dom.iterable", "esnext"],
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "esnext"
+    ],
     "allowJs": true,
     "skipLibCheck": true,
     "strict": true,
@@ -14,10 +18,14 @@
     "jsx": "react-jsx",
     "incremental": true,
     "plugins": [
-      { "name": "next" }
+      {
+        "name": "next"
+      }
     ],
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": [
+        "./src/*"
+      ]
     }
   },
   "include": [
@@ -30,7 +38,15 @@
     ".next-local/types/**/*.ts",
     ".next-local/dev/types/**/*.ts",
     ".next-runtime-verify/types/**/*.ts",
-    ".next-runtime-verify/dev/types/**/*.ts"
+    ".next-runtime-verify/dev/types/**/*.ts",
+    ".next-daily-attendance/types/**/*.ts",
+    ".next-daily-attendance/dev/types/**/*.ts",
+    ".next-local-dev/types/**/*.ts",
+    ".next-local-dev/dev/types/**/*.ts",
+    ".next-messaging-check/types/**/*.ts",
+    ".next-messaging-check/dev/types/**/*.ts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules"
+  ]
 }

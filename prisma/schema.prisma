@@ -77,6 +77,7 @@ model User {
   sectionId                      String?
   section                        Section?        @relation(fields: [sectionId], references: [id], onDelete: SetNull)
   canSend                        Boolean         @default(true)
+  canMarkDailyAttendance        Boolean         @default(true)
   mobileLinkMode                 MobileLinkMode  @default(SMS_LINK)
   active                         Boolean         @default(true)
   mobile                         String?
@@ -92,6 +93,8 @@ model User {
   preparedMessages              PreparedMessage[]
   batches                        MessageBatch[]
   sendSessions                   SendSession[]
+  dailyAttendanceMarked          DailyAttendance[]
+  dailyAttendanceAudits          DailyAttendanceAudit[]
   messagingConnections           MessagingConnection[]
   createdAt                      DateTime        @default(now())
 }
@@ -104,6 +107,7 @@ model Section {
   batches   MessageBatch[]
   sendSessions SendSession[]
   uploads   DetentionUpload[]
+  dailyAttendances DailyAttendance[]
   createdAt DateTime          @default(now())
 }
 
@@ -127,6 +131,7 @@ model Student {
   logs               MessageLog[]
   sendSessionItems  SendSessionItem[]
   entries            DetentionEntry[]
+  dailyAttendanceEntries DailyAttendanceEntry[]
 
   @@index([sectionId, regNo])
   @@index([sectionId, avgAtt, lastListDate])
@@ -181,6 +186,7 @@ model PreparedMessage {
   senderId  String
   sender    User           @relation(fields: [senderId], references: [id], onDelete: Cascade)
   channel   MessageChannel
+  kind      String         @default("DETENTION")
   status    PreparedStatus @default(READY)
   toNumber  String?
   text      String
@@ -188,7 +194,7 @@ model PreparedMessage {
   listDate  DateTime?
   sessionItems SendSessionItem[]
   updatedAt DateTime       @updatedAt
-  @@unique([studentId, senderId, channel])
+  @@unique([studentId, senderId, channel, kind])
   @@index([senderId, status])
 }
 
@@ -201,6 +207,7 @@ model MessageLog {
   sentById   String
   senderName String
   channel    MessageChannel
+  kind       String         @default("DETENTION")
   status     MessageStatus  @default(QUEUED)
   mode       String?
   error      String?
@@ -227,6 +234,7 @@ model SendSession {
   userId      String
   user        User              @relation(fields: [userId], references: [id], onDelete: Cascade)
   channel     MessageChannel
+  kind        String            @default("DETENTION")
   mobileLinkMode MobileLinkMode @default(SMS_LINK)
   sectionId   String
   section     Section           @relation(fields: [sectionId], references: [id], onDelete: Cascade)
@@ -247,6 +255,7 @@ model SendSessionItem {
   session           SendSession           @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   studentId         String
   student           Student               @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  kind              String                @default("DETENTION")
   preparedMessageId String?
   preparedMessage   PreparedMessage?      @relation(fields: [preparedMessageId], references: [id], onDelete: SetNull)
   messageLogId      String?               @unique
@@ -262,4 +271,48 @@ model SendSessionItem {
 model Setting {
   key   String @id
   value String
+}
+
+model DailyAttendance {
+  id          String   @id @default(cuid())
+  sectionId   String
+  section     Section  @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  date        DateTime
+  markedById  String?
+  markedByName String
+  markedBy    User?    @relation(fields: [markedById], references: [id], onDelete: SetNull)
+  submittedAt DateTime
+  updatedAt   DateTime @updatedAt
+  isHoliday   Boolean  @default(false)
+  entries     DailyAttendanceEntry[]
+  audits      DailyAttendanceAudit[]
+  @@unique([sectionId, date])
+  @@index([date, sectionId])
+}
+
+model DailyAttendanceEntry {
+  id                String          @id @default(cuid())
+  dailyAttendanceId String
+  dailyAttendance   DailyAttendance @relation(fields: [dailyAttendanceId], references: [id], onDelete: Cascade)
+  studentId         String
+  student           Student         @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  status            String
+  updatedAt         DateTime        @updatedAt
+  @@unique([dailyAttendanceId, studentId])
+  @@index([studentId, dailyAttendanceId])
+}
+
+model DailyAttendanceAudit {
+  id                String          @id @default(cuid())
+  dailyAttendanceId String
+  dailyAttendance   DailyAttendance @relation(fields: [dailyAttendanceId], references: [id], onDelete: Cascade)
+  changedById       String?
+  changedByName     String
+  changedBy         User?           @relation(fields: [changedById], references: [id], onDelete: SetNull)
+  studentId         String?
+  field             String
+  fromValue         String?
+  toValue           String?
+  changedAt         DateTime        @default(now())
+  @@index([dailyAttendanceId, changedAt])
 }

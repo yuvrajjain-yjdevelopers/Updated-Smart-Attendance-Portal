@@ -9,6 +9,7 @@ type Log = {
   id: string;
   senderName: string;
   channel: string;
+  kind: "DETENTION" | "ABSENCE";
   status: string;
   mode: string | null;
   toNumber: string;
@@ -35,11 +36,12 @@ export default function MessagesPage() {
   const [rows, setRows] = useState<Log[]>([]);
   const [error, setError] = useState("");
   const [readyCount, setReadyCount] = useState(0);
+  const [kind, setKind] = useState<"ALL" | "DETENTION" | "ABSENCE">("ALL");
 
   useEffect(() => {
     let active = true;
     void fetch("/api/messages/prepared").then(r=>r.json()).then(d=>{if(active)setReadyCount((d.messages||[]).filter((m:{status:string})=>m.status==="READY").length)}).catch(()=>{});
-    void fetch("/api/messages")
+    void fetch(`/api/messages${kind === "ALL" ? "" : `?kind=${kind}`}`)
       .then(async (response) => {
         const data = await response.json();
         if (!response.ok) throw new Error(data.error);
@@ -51,7 +53,7 @@ export default function MessagesPage() {
     return () => {
       active = false;
     };
-  }, []);
+  }, [kind]);
 
   const testCount = rows.filter((row) => row.batch.testMode).length;
   const liveCount = rows.length - testCount;
@@ -68,6 +70,7 @@ export default function MessagesPage() {
           <div><h2>Message history</h2><p>Sender names and test mode are recorded for every recipient.</p></div>
           <div className="message-log-count"><span>{readyCount}</span> ready to send · {rows.length} records</div>
         </div>
+        <label className="message-kind-filter">Message kind <select value={kind} onChange={event => setKind(event.target.value as "ALL" | "DETENTION" | "ABSENCE")}><option value="ALL">All messages</option><option value="ABSENCE">Absence</option><option value="DETENTION">Detention</option></select></label>
         <div className="message-summary-strip">
           <div><span className="message-summary-icon"><Send size={15} /></span><span><small>Total messages</small><b>{rows.length}</b></span></div>
           <div><span className="message-summary-icon live-summary"><Radio size={15} /></span><span><small>Live sends</small><b>{liveCount}</b></span></div>
@@ -76,10 +79,11 @@ export default function MessagesPage() {
 
         <div className="message-table-scroll">
           <table className="message-table">
-            <thead><tr><th>Student</th><th>Section</th><th>Attendance</th><th>Attendance status</th><th>Channel</th><th>Status</th><th>Sent by</th><th>Recipient</th><th>Mode</th><th>Sent at</th></tr></thead>
+            <thead><tr><th>Kind</th><th>Student</th><th>Section</th><th>Attendance</th><th>Attendance status</th><th>Channel</th><th>Status</th><th>Sent by</th><th>Recipient</th><th>Mode</th><th>Sent at</th></tr></thead>
             <tbody>
               {rows.map((row) => (
                 <tr key={row.id}>
+                  <td><span className={`message-kind-chip ${row.kind === "ABSENCE" ? "absence" : "detention"}`}>{row.kind === "ABSENCE" ? "Absence" : "Detention"}</span></td>
                   <td className="message-student-cell"><b>{row.student.name}</b></td>
                   <td><span className="message-section-chip">{row.student.section.name}</span></td>
                   <td>{row.attendance===null?"—":`${row.attendance}%`} {row.attendanceSource&&<small className="attendance-source-tag">{row.attendanceSource}</small>}</td>
@@ -92,7 +96,7 @@ export default function MessagesPage() {
                   <td className="message-time-cell">{formatDate(row.createdAt)}</td>
                 </tr>
               ))}
-              {!rows.length && !error && <tr><td colSpan={10} className="message-empty-cell"><span><MessageSquareText size={22} /></span><b>No messages recorded yet</b><small>Messages you send will appear here with sender and delivery details.</small></td></tr>}
+              {!rows.length && !error && <tr><td colSpan={11} className="message-empty-cell"><span><MessageSquareText size={22} /></span><b>No messages recorded yet</b><small>Messages you send will appear here with sender and delivery details.</small></td></tr>}
             </tbody>
           </table>
         </div>

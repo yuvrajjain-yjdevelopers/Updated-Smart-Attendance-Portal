@@ -23,6 +23,7 @@ type Teacher = {
   sectionId: string | null;
   section: { id: string; name: string } | null;
   canSend: boolean;
+  canMarkDailyAttendance: boolean;
   active: boolean;
   gatewayConfigured: boolean;
   senderNumber: string | null;
@@ -224,6 +225,7 @@ export default function TeachersPage() {
               <div className="teacher-card-info">
                 <label className="teacher-section-control"><span>Assigned section</span><select aria-label={`Section for ${teacher.name}`} value={teacher.sectionId || ""} onChange={(event) => void patch(teacher, { sectionId: event.target.value || null })}><option value="">Unassigned</option>{sections.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}</select></label>
                 <div className="teacher-info-cell"><span>Messaging permission</span><button className={`permission-pill ${teacher.canSend ? "permission-on" : "permission-off"}`} onClick={() => void patch(teacher, { canSend: !teacher.canSend })}>{teacher.canSend ? "Allowed" : "Disabled"}</button></div>
+                <div className="teacher-info-cell"><span>Daily attendance</span><button className={`permission-pill ${teacher.canMarkDailyAttendance ? "permission-on" : "permission-off"}`} onClick={() => void patch(teacher, { canMarkDailyAttendance: !teacher.canMarkDailyAttendance })}>{teacher.canMarkDailyAttendance ? "Allowed" : "Disabled"}</button></div>
                 <div className="teacher-info-cell"><span>Sender phone</span><b className={teacher.gatewayConfigured ? "teacher-phone-value" : "teacher-muted-value"}>{teacher.senderNumber || "Not configured"}</b></div>
                 <div className="teacher-info-cell"><span>Last connection test</span><b className="teacher-test-result"><i className={teacher.lastTestAt ? teacher.lastTestOk ? "test-passed" : "test-failed" : "test-unknown"} />{teacher.lastTestAt ? `${teacher.lastTestOk ? "Passed" : "Failed"} · ${formatDate(teacher.lastTestAt)}` : "Never tested"}</b></div>
                 <div className="teacher-info-cell"><span>Last login</span><b>{formatDate(teacher.lastLoginAt)}</b></div>

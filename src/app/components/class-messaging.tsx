@@ -5,11 +5,11 @@ import { buildSmsUrl, buildWhatsAppUrl, GOOGLE_MESSAGES_URL } from "@/lib/sendCe
 import { normalizeIndianMobile } from "@/lib/phone";
 import { getSmsMetrics, MAX_SMS_PARTS } from "@/lib/messageTemplates";
 
-type Student = { id: string; name: string; regNo: string; parentMobile: string; avgAtt: number | null; isDetained: boolean; statusLabel: string; attendanceSourceLabel: string };
+type Student = { id: string; name: string; regNo: string; parentMobile: string; avgAtt: number | null; isDetained: boolean; statusLabel: string; attendanceSourceLabel: string; absentDaysThisMonth?: number; smsStatus?: string; whatsappStatus?: string };
 type Prepared = { id: string; studentId: string; name: string; regNo: string; avgAtt: number | null; attendanceSource: "LIST" | "ROSTER" | "NONE"; attendanceSourceLabel: string; statusLabel: string; section: string; channel: "SMS" | "WHATSAPP"; status: string; toNumber: string | null; text: string; excludeReason?: string | null };
 type Queue = { id: string; preparedId: string; name: string; regNo: string; avgAtt: number | null; statusLabel: string; section: string; toNumber: string; text: string; channel: "SMS" | "WHATSAPP"; status: string };
 type PrepareProgress = { processed: number; total: number; prepared: number };
-type Props = { students: Student[]; senderName: string; senderMobile?: string; sectionId: string; mobileLinkMode?: "SMS_LINK" | "GOOGLE_MESSAGES" | "PHONE"; canSend: boolean; isHod?: boolean };
+type Props = { students: Student[]; senderName: string; senderMobile?: string; sectionId: string; mobileLinkMode?: "SMS_LINK" | "GOOGLE_MESSAGES" | "PHONE"; canSend: boolean; isHod?: boolean; kind?: "DETENTION" | "ABSENCE"; date?: string; sendAfter?: string };
 type Channel = "SMS" | "WHATSAPP";
 type ApiResponse = ReturnType<typeof JSON.parse>;
 function toClientMode(mode: "SMS_LINK" | "GOOGLE_MESSAGES" | "PHONE") { return mode === "GOOGLE_MESSAGES" ? "google-messages" : mode === "PHONE" ? "phone" : "sms-link"; }
@@ -21,9 +21,9 @@ async function readApiResponse<T = ApiResponse>(response: Response): Promise<T> 
   catch { throw new Error(`The server returned an invalid response (HTTP ${response.status}). Please refresh and retry.`); }
 }
 
-export default function ClassMessaging({ students, senderName, senderMobile = "", sectionId, mobileLinkMode = "SMS_LINK", canSend, isHod = false }: Props) {
+export default function ClassMessaging({ students, senderName, senderMobile = "", sectionId, mobileLinkMode = "SMS_LINK", canSend, isHod = false, kind = "DETENTION", date = "", sendAfter = "" }: Props) {
   const [prepared, setPrepared] = useState<Prepared[]>([]);
-  const [selected, setSelected] = useState<string[]>([]);
+  const [selected, setSelected] = useState<string[] | null>(null);
   const [excluded, setExcluded] = useState<string[]>([]);
   const [channel, setChannel] = useState<Channel | null>(null);
   const [review, setReview] = useState(false);
@@ -44,16 +44,22 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
   const [dirtyPrepared, setDirtyPrepared] = useState<string[]>([]);
   const [expandedPrepared, setExpandedPrepared] = useState<string[]>([]);
   const [debugOpen, setDebugOpen] = useState(false);
+  const [sendAgain, setSendAgain] = useState(false);
+  const [flowKind, setFlowKind] = useState(kind);
+  const [flowDate, setFlowDate] = useState(date);
   const [setupOpen, setSetupOpen] = useState(false);
   const [connectionKind, setConnectionKind] = useState<"WHATSAPP_WEB" | "MOBILE_LINK">("MOBILE_LINK");
   const [conflictSession, setConflictSession] = useState<{ id: string; sectionId: string; sectionName: string; channel: Channel } | null>(null);
   const reusedWindow = useRef<Window | null>(null);
+  const selectedIds = selected ?? (flowKind === "ABSENCE" ? students.filter(student => !["Sent", "Sent by user", "Opened"].includes(student.smsStatus || "") && !["Sent", "Sent by user", "Opened"].includes(student.whatsappStatus || "")).map(student => student.id) : []);
 
   const loadSession = useCallback(async (id: string) => {
     const response = await fetch(`/api/send-sessions/${id}`, { cache: "no-store" });
     const data = await readApiResponse(response);
     if (!response.ok) throw new Error(data.error || "Could not resume this send.");
     setSessionId(data.session.id);
+    setFlowKind(data.session.kind || kind);
+    if (data.session.date) setFlowDate(data.session.date);
     setChannel(data.session.channel);
     setQueue(data.queue);
     setCursor(data.currentQueueIndex);
@@ -63,7 +69,7 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
     setReview(false);
     setSetupOpen(data.session.status === "PAUSED_SETUP");
     localStorage.setItem("attendance-active-send", data.session.id);
-  }, []);
+  }, [kind]);
 
   useEffect(() => {
     queueMicrotask(() => setMode(toClientMode(mobileLinkMode)));
@@ -84,8 +90,8 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
   }, [loadSession, mobileLinkMode, sessionId]);
 
   const visibleStudents = students.filter(student => `${student.name} ${student.regNo}`.toLowerCase().includes(filter.toLowerCase()));
-  const allVisibleSelected = visibleStudents.length > 0 && visibleStudents.every(student => selected.includes(student.id));
-  const selectedStudents = students.filter(student => selected.includes(student.id));
+  const allVisibleSelected = visibleStudents.length > 0 && visibleStudents.every(student => selectedIds.includes(student.id));
+  const selectedStudents = students.filter(student => selectedIds.includes(student.id));
   const missing = selectedStudents.filter(student => { try { normalizeIndianMobile(student.parentMobile); return false; } catch { return true; } });
   const ready = useMemo(() => prepared.filter(message => message.status === "READY" && message.toNumber && !excluded.includes(message.id)), [prepared, excluded]);
   const oversizedSms = channel === "SMS" ? ready.filter(message => getSmsMetrics(message.text).parts > MAX_SMS_PARTS) : [];
@@ -107,11 +113,11 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
     setPrepared([]);
     setExcluded([]);
     setPreparationMs(null);
-    setPrepareProgress({ processed: 0, total: selected.length, prepared: 0 });
+    setPrepareProgress({ processed: 0, total: selectedIds.length, prepared: 0 });
     setLoading(true);
     const started = performance.now();
     try {
-      const params = new URLSearchParams({ studentIds: selected.join(","), sectionId, channel: channelToPrepare, stream: "1" });
+      const params = new URLSearchParams({ studentIds: selectedIds.join(","), sectionId, channel: channelToPrepare, stream: "1", kind: flowKind, ...(flowKind === "ABSENCE" ? { date: flowDate, sendAgain: sendAgain ? "1" : "0" } : {}) });
       const response = await fetch(`/api/messages/prepared?${params.toString()}`, { cache: "no-store" });
       if (!response.ok) { const error = await readApiResponse(response); throw new Error(error.error || "Could not prepare selected messages."); }
       let data: { messages: Prepared[]; preparedMs: number; testMode: boolean; testNumber: string } | null = null;
@@ -142,7 +148,7 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
       setDirtyPrepared([]);
       setExpandedPrepared(data.messages?.[0]?.id ? [data.messages[0].id] : []);
       setPreparationMs(Math.max(data.preparedMs ?? 0, Math.round(performance.now() - started)));
-      setPrepareProgress({ processed: selected.length, total: selected.length, prepared: data.messages.length });
+      setPrepareProgress({ processed: selectedIds.length, total: selectedIds.length, prepared: data.messages.length });
       setTestMode(data.testMode !== false);
       setTestNumber(data.testNumber || "");
     } catch (error) { setPrepareProgress(null); setNotice(error instanceof Error ? error.message : "Could not prepare selected messages."); }
@@ -169,7 +175,7 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
     setConflictSession(null);
     try {
       await saveEditedMessages();
-      const response = await fetch("/api/messages/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ preparedIds: prepared.map(item => item.id), excludedIds: excluded, channel }) });
+      const response = await fetch("/api/messages/send", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ preparedIds: prepared.map(item => item.id), excludedIds: excluded, channel, kind: flowKind, sendAgain }) });
       const data = await readApiResponse(response);
       if (response.status === 409 && data.activeSession) { setConflictSession(data.activeSession); return; }
       if (!response.ok) throw new Error(data.error || "Could not start the send session.");
@@ -282,22 +288,25 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
   return <div className="message-workflow">
     {isHod && <details className="send-debug-disclosure" onToggle={event => setDebugOpen(event.currentTarget.open)}><summary>Debug message preview and URLs</summary>{debugOpen && prepared.map(message => <article key={message.id}><b>{message.name} · {message.channel}</b><p>Attendance: {message.avgAtt === null ? "No data" : `${message.avgAtt}%`} · {message.attendanceSource} · {message.statusLabel}</p><label>Exact text<textarea readOnly rows={5} value={message.text}/></label>{message.toNumber && <><label>SMS URL<code>{buildSmsUrl(message.toNumber, message.text, "android")}</code></label><label>WhatsApp URL<code>{buildWhatsAppUrl(message.toNumber, message.text, "desktop")}</code></label></>}</article>)}</details>}
     <div className="message-send-toolbar">
-      <label><input type="checkbox" checked={allVisibleSelected} onChange={event => setSelected(value => event.target.checked ? [...new Set([...value, ...visibleStudents.map(student => student.id)])] : value.filter(id => !visibleStudents.some(student => student.id === id)))}/> Select all shown students</label>
+      <label><input type="checkbox" checked={allVisibleSelected} onChange={event => setSelected(value => event.target.checked ? [...new Set([...(value ?? selectedIds), ...visibleStudents.map(student => student.id)])] : (value ?? selectedIds).filter(id => !visibleStudents.some(student => student.id === id)))}/> Select all shown students</label>
       <input aria-label="Filter students" placeholder="Filter by name or registration" value={filter} onChange={event => setFilter(event.target.value)}/>
-      <button type="button" onClick={() => setSelected(value => [...new Set([...value, ...visibleStudents.map(student => student.id)])])}>Select filtered</button>
-      <span>{selected.length} selected · {missing.length} missing/invalid parent numbers</span>
-      <button disabled={!canSend || !selected.length || loading} className="message-action-primary" onClick={() => void prepare("SMS")}>Send SMS</button>
-      <button disabled={!canSend || !selected.length || loading} className="message-action-whatsapp" onClick={() => void prepare("WHATSAPP")}>Send WhatsApp</button>
+      <button type="button" onClick={() => setSelected(value => [...new Set([...(value ?? selectedIds), ...visibleStudents.map(student => student.id)])])}>Select filtered</button>
+      <span>{selectedIds.length} selected · {missing.length} missing/invalid parent numbers</span>
+      <button disabled={!canSend || !selectedIds.length || loading} className="message-action-primary" onClick={() => void prepare("SMS")}>Send SMS</button>
+      <button disabled={!canSend || !selectedIds.length || loading} className="message-action-whatsapp" onClick={() => void prepare("WHATSAPP")}>Send WhatsApp</button>
+      {flowKind === "ABSENCE" && <label><input type="checkbox" checked={sendAgain} onChange={event => { setSendAgain(event.target.checked); if (event.target.checked) setSelected(students.map(student => student.id)); else setSelected(students.filter(student => !["Sent", "Sent by user", "Opened"].includes(student.smsStatus || "") && !["Sent", "Sent by user", "Opened"].includes(student.whatsappStatus || "")).map(student => student.id)); }} /> Send again to students already messaged</label>}
+      {flowKind === "ABSENCE" && sendAfter && <span>Available after {sendAfter}</span>}
       {!canSend && <span className="message-permission-note">Your account cannot send messages.</span>}
     </div>
 
     {channel && review && <section role="dialog" aria-modal="true" className="message-confirm-panel">
-      <span className="eyebrow">SEND CENTER · {channel} · English + हिन्दी + मराठी</span>
+      <span className="eyebrow">SEND CENTER · {channel} · {flowKind === "ABSENCE" ? "ABSENCE · " : ""}English + हिन्दी + मराठी</span>
       <h2>Review recipients and message</h2>
-      <p><strong>{testMode ? `TEST MODE: everything goes to ${testNumber || "test number not set"}` : `Parents' numbers: ${ready.length} students`}</strong></p>
+      <p><strong>Parents&apos; numbers: {ready.length} students</strong></p>
+      {testMode && <p className="message-test-badge">TEST MODE: everything goes to {testNumber || "test number not set"}</p>}
       {testMode && <p className="message-test-badge">TEST MODE · test number receives every message</p>}
       {preparationMs !== null && <p role="status">Prepared {prepared.length} messages in {preparationMs} ms</p>}
-      {preparing && <div className="send-preparation-status" role="status" aria-live="polite"><div><b>Preparing {channel === "SMS" ? "SMS" : "WhatsApp"} messages</b><span>{prepareProgress?.prepared ?? 0} messages ready · {prepareProgress?.processed ?? 0} of {prepareProgress?.total ?? selected.length} students checked</span></div><progress value={prepareProgress?.processed ?? 0} max={Math.max(prepareProgress?.total ?? selected.length, 1)} /><small>Building personalized message text…</small></div>}
+      {preparing && <div className="send-preparation-status" role="status" aria-live="polite"><div><b>Preparing {channel === "SMS" ? "SMS" : "WhatsApp"} messages</b><span>{prepareProgress?.prepared ?? 0} messages ready · {prepareProgress?.processed ?? 0} of {prepareProgress?.total ?? selectedIds.length} students checked</span></div><progress value={prepareProgress?.processed ?? 0} max={Math.max(prepareProgress?.total ?? selectedIds.length, 1)} /><small>Building personalized message text…</small></div>}
       {!preparing && <>
         {missing.length > 0 && <aside className="send-excluded-list"><b>Excluded · missing or invalid parent number</b>{missing.map(student => <span key={student.id}>{student.name} · {student.regNo} — no valid parent number</span>)}</aside>}
         {prepared.map(message => <article className="send-prepared-item" key={message.id}>
@@ -310,6 +319,7 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
       </>}
       {channel === "SMS" && ready[0] && <small className={oversizedSms.length ? "template-counter counter-warning" : "template-counter"}>{getSmsMetrics(ready[0].text).characters} {getSmsMetrics(ready[0].text).encoding} units · {getSmsMetrics(ready[0].text).parts} SMS parts{oversizedSms.length ? ` · ${oversizedSms.length} message(s) exceed the ${MAX_SMS_PARTS}-part limit` : ""}</small>}
       {channel === "SMS" && <label>Mobile link mode<select value={mode} onChange={event => chooseMode(event.target.value)}><option value="sms-link">SMS link</option><option value="google-messages">Google Messages for web (copy and paste)</option><option value="phone">Phone</option></select></label>}
+      {flowKind === "ABSENCE" && <label className="message-send-again"><input type="checkbox" checked={sendAgain} onChange={event => setSendAgain(event.target.checked)} /> Send again to students already messaged</label>}
       <div className="message-confirm-actions"><button disabled={!ready.length || loading || modeSaving || oversizedSms.length > 0 || editingPrepared.length > 0 || dirtyPrepared.length > 0} onClick={() => void startQueue()} className="message-action-primary">{loading ? "Preparing…" : modeSaving ? "Saving mode…" : editingPrepared.length || dirtyPrepared.length ? "Save edits before sending" : "Start sending"}</button><button onClick={() => { setChannel(null); setReview(false); setPrepared([]); setExcluded([]); setDirtyPrepared([]); setEditingPrepared([]); }} className="message-action-secondary">Cancel</button></div>
     </section>}
 
@@ -318,7 +328,7 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
     {sessionId && queue.length > 0 && <section className="message-queue" aria-label="Send queue">
       <div className="message-queue-head"><h2>{channel} send queue</h2><span>{cursor} of {queue.length} done · saved for resume</span><progress value={cursor} max={queue.length}/></div>
       {current ? <article className="message-queue-card">
-        <p><b>{current.name}</b> · {current.regNo} · {current.avgAtt === null ? "No data" : `${current.avgAtt}%`} · {current.statusLabel} · +{current.toNumber.slice(0, 2)} {current.toNumber.slice(2, 7)} {current.toNumber.slice(7)}</p>
+        <p><b>{current.name}</b> · {current.regNo} · {flowKind === "ABSENCE" ? "Absent " + flowDate : current.avgAtt === null ? "No data" : `${current.avgAtt}%`} · {current.statusLabel} · +{current.toNumber.slice(0, 2)} {current.toNumber.slice(2, 7)} {current.toNumber.slice(7)}</p>
         <textarea aria-label="Message text" rows={8} value={current.text} onChange={event => setQueue(rows => rows.map((row, index) => index === cursor ? { ...row, text: event.target.value } : row))} onBlur={event => void editQueue(current, event.currentTarget.value)}/>
         {current.channel === "WHATSAPP" ? <p>Sending from {senderName}&apos;s WhatsApp. Make sure WhatsApp Web is logged in with your own number in this browser. Press Enter in WhatsApp to send, then return here.</p> : mode === "google-messages" ? <div><p>Copy the number and message into Google Messages, send it, then return here.</p><button onClick={() => void copy(`+${current.toNumber}`, "Number")}>Copy number</button> <button onClick={() => void copy(current.text, "Message")}>Copy message</button>{copied && <span role="status">{copied}</span>}</div> : <p>Open the SMS link, press Send in your messaging app, then return here.</p>}
         <div className="message-confirm-actions"><button className="message-action-primary" onClick={() => void openCurrent()}>Open</button><button onClick={() => void openCurrent()}>Open again</button><button onClick={() => void updateCurrent("SENT_BY_USER", true)}>Mark as sent · Next</button><button onClick={() => void updateCurrent("SKIPPED", true)}>Skip</button><button className="message-connection-trouble" onClick={() => void connectionTrouble()}>{current.channel === "WHATSAPP" ? "WhatsApp Web asked me to log in" : "SMS app did not open"}</button></div>
@@ -334,7 +344,7 @@ export default function ClassMessaging({ students, senderName, senderMobile = ""
     </section></div>}
 
     {notice && <p role="status" className="message-workflow-notice">{notice}</p>}
-    <div className="message-recipient-table-wrap"><table className="message-recipient-table"><thead><tr><th>Select</th><th>Registration</th><th>Student</th><th>Attendance</th><th>Status</th></tr></thead><tbody>{visibleStudents.map(student => <tr key={student.id}><td><input type="checkbox" aria-label={`Select ${student.name}`} checked={selected.includes(student.id)} onChange={() => setSelected(value => value.includes(student.id) ? value.filter(id => id !== student.id) : [...value, student.id])}/></td><td>{student.regNo}</td><td>{student.name}</td><td>{student.avgAtt === null ? "—" : `${student.avgAtt}%`} {student.attendanceSourceLabel && <small className="attendance-source-tag">{student.attendanceSourceLabel}</small>}</td><td>{student.statusLabel}</td></tr>)}{!students.length && <tr><td colSpan={5}>No students need follow-up.</td></tr>}</tbody></table></div>
+    <div className="message-recipient-table-wrap"><table className="message-recipient-table"><thead><tr><th>Select</th><th>Registration</th><th>Student</th><th>Attendance</th><th>Status</th></tr></thead><tbody>{visibleStudents.map(student => <tr key={student.id}><td><input type="checkbox" aria-label={"Select " + student.name} checked={selectedIds.includes(student.id)} onChange={() => setSelected(value => (value ?? selectedIds).includes(student.id) ? (value ?? selectedIds).filter(id => id !== student.id) : [...(value ?? selectedIds), student.id])}/></td><td>{student.regNo}</td><td>{student.name}</td>{flowKind === "ABSENCE" ? <><td><span className="message-kind-chip absence">Absent {flowDate}</span><small className="attendance-source-tag">absent days this month: {student.absentDaysThisMonth || 0}</small></td><td>SMS: {student.smsStatus || "Not sent"} · WhatsApp: {student.whatsappStatus || "Not sent"}</td></> : <><td>{student.avgAtt === null ? "—" : student.avgAtt + "%"} {student.attendanceSourceLabel && <small className="attendance-source-tag">{student.attendanceSourceLabel}</small>}</td><td>{student.statusLabel}</td></>}</tr>)}{!students.length && <tr><td colSpan={5}>{flowKind === "ABSENCE" ? "No absent students for this date." : "No students need follow-up."}</td></tr>}</tbody></table></div>
     {sessionId && current && <div className="message-sticky-next"><button onClick={() => void updateCurrent("SENT_BY_USER", true)}>Next message →</button></div>}
   </div>;
 }

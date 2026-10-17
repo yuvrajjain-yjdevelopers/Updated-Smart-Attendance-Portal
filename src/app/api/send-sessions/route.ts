@@ -15,6 +15,7 @@ export async function GET() {
   return NextResponse.json({ sessions: rows.map(session => ({
     id: session.id,
     channel: session.channel,
+    kind: session.kind,
     sectionId: session.sectionId,
     sectionName: session.section.name,
     status: session.status,

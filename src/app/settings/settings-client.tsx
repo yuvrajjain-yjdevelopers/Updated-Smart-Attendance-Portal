@@ -15,6 +15,7 @@ import { PageHeader } from "@/app/components/ui";
 import { buildSmsUrl, buildWhatsAppUrl, GOOGLE_MESSAGES_URL } from "@/lib/sendCenter";
 import { normalizeIndianMobile } from "@/lib/phone";
 import { DEFAULT_TRILINGUAL_SMS_TEMPLATE, DEFAULT_TRILINGUAL_WHATSAPP_TEMPLATE, getSmsMetrics, MAX_SMS_PARTS } from "@/lib/messageTemplates";
+import { DEFAULT_ABSENCE_SMS_TEMPLATE, DEFAULT_ABSENCE_WHATSAPP_TEMPLATE, buildAbsenceMessage, formatAbsenceDate } from "@/features/daily-attendance/messages";
 
 type Gateway = {
   configured: boolean;
@@ -32,6 +33,10 @@ type CollegeSettings = {
   department: string;
   smsTemplate: string;
   whatsappTemplate: string;
+  absenceSmsTemplate: string;
+  absenceWhatsappTemplate: string;
+  teacherDailyAttendanceEditWindowDays: number;
+  absenceMessagesAfter: string;
 };
 type Connection = { kind: "WHATSAPP_WEB" | "MOBILE_LINK"; confirmed: boolean; confirmedAt: string | null; label: string };
 
@@ -42,6 +47,10 @@ const initialCollege: CollegeSettings = {
   department: "",
   smsTemplate: DEFAULT_TRILINGUAL_SMS_TEMPLATE,
   whatsappTemplate: DEFAULT_TRILINGUAL_WHATSAPP_TEMPLATE,
+  absenceSmsTemplate: DEFAULT_ABSENCE_SMS_TEMPLATE,
+  absenceWhatsappTemplate: DEFAULT_ABSENCE_WHATSAPP_TEMPLATE,
+  teacherDailyAttendanceEditWindowDays: 1,
+  absenceMessagesAfter: "",
 };
 
 export default function SettingsClient({
@@ -199,6 +208,11 @@ export default function SettingsClient({
   }
 
   const smsMetrics = getSmsMetrics(college.smsTemplate);
+  const absenceSmsMetrics = getSmsMetrics(college.absenceSmsTemplate);
+  const absencePreviewDay = new Date(Date.UTC(2026, 9, 17));
+  const absencePreviewValues = { studentName: "Asha Patil", regNo: "CS101", section: "CS-A", date: formatAbsenceDate(absencePreviewDay, "en-GB"), dateHi: formatAbsenceDate(absencePreviewDay, "hi-IN"), dateMr: formatAbsenceDate(absencePreviewDay, "mr-IN"), senderName: name, senderMobile: mobile || "9876543210", department: college.department || "Computer Science", collegeName: college.collegeName || "City College" };
+  const absenceSmsPreview = buildAbsenceMessage(college.absenceSmsTemplate, absencePreviewValues, "SMS", false);
+  const absenceWhatsAppPreview = buildAbsenceMessage(college.absenceWhatsappTemplate, absencePreviewValues, "WHATSAPP", false);
   const statusOkay = notice.includes("saved") || notice.includes("succeeded") || notice.includes("successfully");
 
   return (
@@ -225,6 +239,11 @@ export default function SettingsClient({
           <div className="settings-template-grid">
             <label className="settings-field"><span>SMS template · English + हिन्दी + मराठी</span><textarea rows={6} value={college.smsTemplate} onChange={(event) => setCollege({ ...college, smsTemplate: event.target.value })} /><small className={`template-counter ${smsMetrics.parts > MAX_SMS_PARTS ? "counter-warning" : ""}`}>{smsMetrics.characters} {smsMetrics.encoding} units · {smsMetrics.parts} SMS part{smsMetrics.parts === 1 ? "" : "s"} · maximum {MAX_SMS_PARTS} parts</small></label>
             <label className="settings-field"><span>WhatsApp template · English + हिन्दी + मराठी</span><textarea rows={8} value={college.whatsappTemplate} onChange={(event) => setCollege({ ...college, whatsappTemplate: event.target.value })} /><small className="template-help">Add extra wording in any of the three languages. Detained subject details are intentionally omitted. Placeholders: <code>{"{student_name}"}</code>, <code>{"{reg_no}"}</code>, <code>{"{section}"}</code>, <code>{"{avg}"}</code>, <code>{"{sender_name}"}</code>, <code>{"{sender_mobile}"}</code>, <code>{"{college_name}"}</code>, <code>{"{department}"}</code>.</small></label>
+            <div className="settings-template-subheading"><h3>Daily absence messages · English + हिन्दी + मराठी</h3><p>These templates use daily attendance only and do not include attendance percentages or detained subjects. Keep all three language blocks together, in this order.</p></div>
+            <label className="settings-field"><span>Absence SMS template · English + हिन्दी + मराठी</span><textarea rows={9} value={college.absenceSmsTemplate} onChange={(event) => setCollege({ ...college, absenceSmsTemplate: event.target.value })} /><small className={`template-counter ${absenceSmsMetrics.parts > MAX_SMS_PARTS ? "counter-warning" : ""}`}>{absenceSmsMetrics.characters} {absenceSmsMetrics.encoding} units · {absenceSmsMetrics.parts} SMS part{absenceSmsMetrics.parts === 1 ? "" : "s"} · Unicode SMS uses 70 characters per part (67 for multipart)</small><small>Live preview</small><pre className="settings-template-preview">{absenceSmsPreview}</pre></label>
+            <label className="settings-field"><span>Absence WhatsApp template · English + हिन्दी + मराठी</span><textarea rows={9} value={college.absenceWhatsappTemplate} onChange={(event) => setCollege({ ...college, absenceWhatsappTemplate: event.target.value })} /><small className="template-help">Placeholders: <code>{"{student_name}"}</code>, <code>{"{reg_no}"}</code>, <code>{"{date}"}</code>, <code>{"{date_hi}"}</code>, <code>{"{date_mr}"}</code>.</small><small>Live preview</small><pre className="settings-template-preview">{absenceWhatsAppPreview}</pre></label>
+            <label className="settings-field"><span>Teacher edit window (days)</span><input type="number" min={0} max={31} value={college.teacherDailyAttendanceEditWindowDays} onChange={event => setCollege({ ...college, teacherDailyAttendanceEditWindowDays: Number(event.target.value) })} /><small>Default 1 allows teachers to edit today and yesterday.</small></label>
+            <label className="settings-field"><span>Absence messages available after (optional)</span><input type="time" value={college.absenceMessagesAfter} onChange={event => setCollege({ ...college, absenceMessagesAfter: event.target.value })} /><small>HOD can override this time restriction.</small></label>
           </div>
           <div className="settings-card-actions"><button className="settings-primary-button" onClick={() => void saveCollege()}><Save size={16} />Save messaging settings</button></div>
         </section>

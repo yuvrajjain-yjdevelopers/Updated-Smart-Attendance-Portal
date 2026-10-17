@@ -43,9 +43,10 @@ export function buildPreparedText(input: PreparedTextInput, renderer?: TemplateR
 export function buildPreparedTextBatch(inputs: PreparedTextInput[]) {
   const renderers = new Map<string, TemplateRenderer>();
   return inputs.map(input => {
-    let renderer = renderers.get(input.template);
-    if (!renderer) { renderer = compileTemplate(input.template); renderers.set(input.template, renderer); }
-    return buildPreparedText(input, renderer);
+    const template = input.channel === "SMS" ? sanitizeSmsTemplate(input.template) : input.template;
+    let renderer = renderers.get(template);
+    if (!renderer) { renderer = compileTemplate(template); renderers.set(template, renderer); }
+    return buildPreparedText({ ...input, template }, renderer);
   });
 }
 
@@ -63,7 +64,7 @@ export async function prepareSelectedForSender(input: { senderId: string; sectio
     db.setting.findMany({ where: { key: { in: preparationKeys } }, select: { key: true, value: true } }),
     db.student.findMany({ where: { id: { in: ids }, sectionId: input.sectionId }, select: { id: true, name: true, regNo: true, parentMobile: true, avgAtt: true, totalAttendancePct: true, lastListDate: true, isDetained: true, lowSubjectCount: true, detainedSubjects: true, section: { select: { name: true } } } }),
     db.user.findUnique({ where: { id: input.senderId }, select: { id: true, name: true, mobile: true } }),
-    db.preparedMessage.findMany({ where: { senderId: input.senderId, studentId: { in: ids }, channel: input.channel }, select: { id: true, studentId: true, status: true, sourceFingerprint: true } }),
+    db.preparedMessage.findMany({ where: { senderId: input.senderId, studentId: { in: ids }, channel: input.channel, kind: "DETENTION" }, select: { id: true, studentId: true, status: true, sourceFingerprint: true } }),
   ]);
   if (!sender) throw new Error("Sender account not found.");
   const settings = Object.fromEntries(settingRows.map(row => [row.key, row.value]));
@@ -114,7 +115,7 @@ export async function regeneratePreparedMessages(sectionId?: string, senderOnlyI
   const eligibleStudents = allStudents.filter(student => ["Detained"].includes(getStatus(student, threshold)));
   const senderIds = senders.map(sender => sender.id);
   const existingRows = senderIds.length ? await db.preparedMessage.findMany({
-    where: { senderId: { in: senderIds }, ...(sectionId ? { student: { sectionId } } : {}) },
+    where: { senderId: { in: senderIds }, kind: "DETENTION", ...(sectionId ? { student: { sectionId } } : {}) },
     select: { id: true, studentId: true, senderId: true, channel: true, status: true, toNumber: true, text: true, listDate: true, sourceFingerprint: true },
   }) : [];
   const existingByKey = new Map(existingRows.map(row => [`${row.studentId}:${row.senderId}:${row.channel}`, row]));
@@ -139,8 +140,8 @@ export async function regeneratePreparedMessages(sectionId?: string, senderOnlyI
         const nextListDate = listDate?.getTime() ?? null;
         const changed = !previous || previous.status !== status || previous.toNumber !== number || previous.text !== text || previousListDate !== nextListDate || previous.sourceFingerprint !== fingerprint;
         if (!changed) continue;
-        const key = { studentId_senderId_channel: { studentId: student.id, senderId: sender.id, channel } };
-        writes.push(db.preparedMessage.upsert({ where: key, create: { studentId: student.id, senderId: sender.id, channel, status, toNumber: number, text, listDate, sourceFingerprint: fingerprint }, update: { status, toNumber: number, text, listDate, sourceFingerprint: fingerprint } }));
+        const key = { studentId_senderId_channel_kind: { studentId: student.id, senderId: sender.id, channel, kind: "DETENTION" } };
+        writes.push(db.preparedMessage.upsert({ where: key, create: { studentId: student.id, senderId: sender.id, channel, kind: "DETENTION", status, toNumber: number, text, listDate, sourceFingerprint: fingerprint }, update: { status, toNumber: number, text, listDate, sourceFingerprint: fingerprint } }));
       }
     }
   }
@@ -157,7 +158,7 @@ export async function ensurePreparedForSender(senderId: string, sectionId?: stri
   const [settingRows, students, existing] = await Promise.all([
     db.setting.findMany({ where: { key: { in: ["attendanceThreshold", "threshold"] } }, select: { key: true, value: true } }),
     db.student.findMany({ where: sectionId ? { sectionId } : {}, select: { id: true, avgAtt: true, totalAttendancePct: true, lastListDate: true, isDetained: true, lowSubjectCount: true } }),
-    db.preparedMessage.findMany({ where: { senderId, ...(sectionId ? { student: { sectionId } } : {}) }, select: { studentId: true, channel: true } }),
+    db.preparedMessage.findMany({ where: { senderId, kind: "DETENTION", ...(sectionId ? { student: { sectionId } } : {}) }, select: { studentId: true, channel: true } }),
   ]);
   const settings = Object.fromEntries(settingRows.map(row => [row.key, row.value]));
   const threshold = Number(settings.attendanceThreshold || settings.threshold || DEFAULT_ATTENDANCE_THRESHOLD);
