@@ -34,4 +34,15 @@ describe("detention PDF text parser",()=>{
   expect(parsed[0]).toMatchObject({regNo:"GHRUA26011450001",name:"PUSHPAK ANAND GULKARI",avg:91,subjects:["UNITPR102","UNITT102"],branch:"ARTIFICIAL INTELLIGENCE"});
   expect(parsed[1]).toMatchObject({regNo:"GHRUA26011450002",avg:67,subjects:["UNBST103","UNCSPR101","UNEEPR101","UNEET101","UNHUT101","UNITPR102","UNITT102"]});
  });
+ it("keeps exact and above-threshold AVG values in parsed rows for attendance updates",()=>{
+  const parsed=parseDetentionPdfPages([[
+   "Branch : ARTIFICIAL INTELLIGENCE Semester : I",
+   "1 - GHRUA26011450001 PUSHPAK ANAND GULKARI",
+   "89% 75% 91.0 % N/A UNBST103 -",
+   "2 - GHRUA26011450002 KOUNEN AYAZ SHEIKH",
+   "78% 75.0 % N/A UNCSPR101 -",
+  ].join("\n")]);
+  expect(parsed.map(student => student.avg)).toEqual([91,75]);
+  expect(parsed).toHaveLength(2);
+ });
 });
