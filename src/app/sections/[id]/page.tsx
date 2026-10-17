@@ -60,7 +60,7 @@ export default async function SectionPage({ params, searchParams }: { params: Pr
         </div>
       </header>
       <UnfinishedSendBanner />
-      <DetentionUploader sectionId={section.id} sectionName={section.name} />
+      <DetentionUploader sectionId={section.id} sectionName={section.name} allowAddUnmatched />
       <SectionTabs
         initialTab={query.resumeSession ? "messages" : "students"}
         students={<SectionStudents sectionId={section.id} />}

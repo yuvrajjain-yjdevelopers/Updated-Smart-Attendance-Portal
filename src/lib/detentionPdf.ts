@@ -1,17 +1,115 @@
-export type ParsedDetentionStudent={regNo:string;name:string;avg:number;subjects:string[];branch:string};
-const AVG=/(\d{1,3}\.\d+)\s*%/;
-const REG=/(?=[A-Z0-9]*[A-Z])(?=[A-Z0-9]*\d)[A-Z0-9]{7,24}/i;
-const noise=/^(?:page\s+\d+|\d+\s*\/\s*\d+|roll\s*no|reg(?:istration)?\s*no|name\s+of|avg\s*att|detained\s+course|legend|branch\s*:|section\s*:|sl\.?\s*no|subject\s+code)/i;
-function tidy(s:string){return s.replace(/\s+/g," ").trim();}
-function isSubject(s:string){const value=tidy(s).replace(/[\s-]+/g,"");return /^[A-Z]{2,}[A-Z0-9]{3,}$/i.test(value)&&value.length>=6;}
-export function parseDetentionPdfPages(pages:string[]):ParsedDetentionStudent[]{
- const result:ParsedDetentionStudent[]=[];let branch="";let pending:string[]=[];let blockLines:string[]=[];let awaitingBranch=false;let inLegend=false;
- const flush=()=>{if(!blockLines.length)return;const raw=blockLines.map(tidy).filter(Boolean);const idx=raw.findIndex(line=>AVG.test(line));if(idx<0){blockLines=[];return;}const row=raw[idx];const match=row.match(AVG)!;const avg=Number(match[1]);const before=tidy(`${raw.slice(0,idx).join(" ")} ${row.slice(0,match.index)}`);const regNo=before.match(REG)?.[0]?.toUpperCase();if(regNo){const name=tidy(before.replace(regNo," ").replace(/\b\d+\b/g," ").replace(/[-|]/g," "));const after=[row.slice((match.index??0)+match[0].length),...raw.slice(idx+1)];const subjects:string[]=[];for(let i=0;i<after.length;i++){const s=after[i];if(noise.test(s)||s==="-")continue;if(isSubject(s)){let code=s.replace(/[\s-]+/g,"").toUpperCase();if(/^\d+\s*-?$/.test(after[i+1]??"")){code+=tidy(after[i+1]).replace(/\D/g,"");i++;}if(!subjects.includes(code))subjects.push(code);}}if(name)result.push({regNo,name,avg,subjects,branch});}blockLines=[];};
- for(const page of pages){for(const rawLine of page.split(/\r?\n/)){const line=tidy(rawLine);if(!line)continue;if(/^legend\b/i.test(line)){inLegend=true;continue;}if(inLegend&&!(REG.test(line)&&!isSubject(line)))continue;if(REG.test(line)&&!isSubject(line))inLegend=false;if(awaitingBranch){branch=tidy(`${branch} ${line}`);awaitingBranch=false;continue;}const b=line.match(/^(?:branch\s*[:\-]?\s*)?(.{3,90}(?:ENGINEERING|SCIENCE|COMMERCE|ARTS|TECHNOLOGY|SPECIALIZATION).*)$/i);if(b&&!AVG.test(line)){const candidate=tidy(`${line} ${pending.join(" ")}`);if(/ENGINEERING|SCIENCE|COMMERCE|ARTS|TECHNOLOGY|SPECIALIZATION/i.test(candidate)){branch=candidate;awaitingBranch=/\bCYBER$/i.test(candidate);pending=[];continue;}}
- if(/^(?:branch|section)\s*[:\-]?$/i.test(line)){pending=[line];continue;}if(pending.length&&line.length<80&&!AVG.test(line)){pending.push(line);if(pending.join(" ").length<100)continue;}
- if(noise.test(line)&&!AVG.test(line))continue;
- if(REG.test(line)&&!isSubject(line)&&blockLines.length&&blockLines.some(part=>AVG.test(part))){flush();blockLines.push(line);continue;}
- if(blockLines.length){if(/^(?:page\s+\d+|\d+\s*\/\s*\d+)$/i.test(line)){continue;}blockLines.push(line);}
- else if(REG.test(line)&&!isSubject(line))blockLines.push(line);
- }}flush();return result;
+export type ParsedDetentionStudent = {
+  regNo: string;
+  name: string;
+  avg: number;
+  subjects: string[];
+  branch: string;
+};
+
+const STUDENT_ROW = /^\s*\d+\s+(?:-\s+)?(?:(?:\d+)\s+){0,3}([A-Z0-9]{9,24})\s*(.*)$/i;
+const OVERALL_AVERAGE_WITH_CGPA = /(\d{1,3}(?:\.\d+)?)\s*%\s*(?=N\s*\/\s*A\b)/i;
+const DECIMAL_AVERAGE = /(\d{1,3}\.\d+)\s*%/;
+const SUBJECT_CODE = /\b[A-Z]{2,}[A-Z0-9]{3,}\b/gi;
+
+function tidy(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function parseAverageLine(lines: string[]) {
+  for (const line of lines) {
+    const match = line.match(OVERALL_AVERAGE_WITH_CGPA) ?? line.match(DECIMAL_AVERAGE);
+    if (match) return { line, value: Number(match[1]), index: match.index ?? 0, length: match[0].length };
+  }
+  return null;
+}
+
+function extractSubjects(lines: string[]) {
+  const subjects = new Set<string>();
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index];
+    for (const match of line.matchAll(SUBJECT_CODE)) {
+      let code = match[0].toUpperCase();
+      if (!/\d{3,}$/.test(code)) {
+        const continuation = lines[index + 1]?.match(/^([0-9]{1,3})\s*-?$/)?.[1];
+        if (continuation) {
+          code += continuation;
+          index++;
+        }
+      }
+      // The report's course codes contain a three-digit course number. This
+      // avoids treating labels such as "N/A" or page metadata as courses.
+      if (/\d{3,}$/.test(code)) subjects.add(code);
+    }
+  }
+  return [...subjects];
+}
+
+export function parseDetentionPdfPages(pages: string[]): ParsedDetentionStudent[] {
+  const result: ParsedDetentionStudent[] = [];
+  let branch = "";
+  let branchNeedsContinuation = false;
+  let block: string[] = [];
+
+  const flush = () => {
+    if (!block.length) return;
+    const average = parseAverageLine(block);
+    const firstLine = block[0];
+    const rowStart = firstLine?.match(STUDENT_ROW);
+    if (!average || !rowStart) {
+      block = [];
+      return;
+    }
+
+    const averageLineIndex = block.indexOf(average.line);
+    const nameText = [rowStart[2], ...block.slice(1, averageLineIndex), average.line.slice(0, average.index)]
+      .join(" ")
+      .replace(/\d{1,3}(?:\.\d+)?\s*%/g, " ")
+      .replace(/\bN\s*\/\s*A\b/gi, " ");
+    const name = tidy(nameText.replace(/[|]+/g, " ").replace(/\s+-\s*$/g, ""));
+
+    const avgLineRemainder = average.line.slice(average.index + average.length);
+    const subjectLines = [avgLineRemainder, ...block.slice(block.indexOf(average.line) + 1)];
+    const subjects = extractSubjects(subjectLines);
+    if (name && Number.isFinite(average.value) && average.value >= 0 && average.value <= 100) {
+      result.push({ regNo: rowStart[1].toUpperCase(), name, avg: average.value, subjects, branch });
+    }
+    block = [];
+  };
+
+  for (const page of pages) {
+    for (const rawLine of page.split(/\r?\n/)) {
+      const line = tidy(rawLine);
+      if (!line) continue;
+
+      if (/^(?:abbrevation|abbreviation|legend)\b/i.test(line)) {
+        flush();
+        break;
+      }
+
+      const branchMatch = line.match(/\bbranch\s*:\s*(.+?)(?:\s+semester\b|\s+section\b|$)/i);
+      if (branchMatch && !STUDENT_ROW.test(line)) {
+        branch = tidy(branchMatch[1].replace(/\s+attendance\b.*$/i, ""));
+        branchNeedsContinuation = !/\b(?:semester|section)\b/i.test(line);
+        continue;
+      }
+
+      if (branchNeedsContinuation && !STUDENT_ROW.test(line) && !/^(?:academic session|degree|section)\b/i.test(line)) {
+        const continuation = /^(?:roll|no\b|registration|student|avg\b|s\.?\s*no\b)/i.test(line)
+          ? undefined
+          : line.match(/^([A-Z][A-Z &-]{1,60}?)(?:\s+semester\b|\s+section\b|$)/i)?.[1];
+        if (continuation) branch = tidy(`${branch} ${continuation}`);
+        branchNeedsContinuation = false;
+        continue;
+      }
+
+      if (STUDENT_ROW.test(line)) {
+        flush();
+        block.push(line);
+      } else if (block.length) {
+        block.push(line);
+      }
+    }
+    flush();
+  }
+  return result;
 }

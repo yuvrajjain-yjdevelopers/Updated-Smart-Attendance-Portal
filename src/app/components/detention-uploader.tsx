@@ -14,7 +14,7 @@ type Preview = {
   notListed: number;
 };
 
-export default function DetentionUploader({ sectionId, sectionName = "this section" }: { sectionId: string; sectionName?: string }) {
+export default function DetentionUploader({ sectionId, sectionName = "this section", allowAddUnmatched = false }: { sectionId: string; sectionName?: string; allowAddUnmatched?: boolean }) {
   const [file, setFile] = useState<File | null>(null);
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
   const [message, setMessage] = useState("");
@@ -75,7 +75,7 @@ export default function DetentionUploader({ sectionId, sectionName = "this secti
         <div><span className="eyebrow">ATTENDANCE UPDATE</span><h2>Upload detention list</h2><p>Preview the college list, confirm matches, and review who will be marked for follow-up.</p></div>
         <span className="detention-file-badge">PDF · CSV · XLSX</span>
       </div>
-      <div className="detention-requirements"><b>Expected columns</b><span>Registration number</span><span>Average attendance</span><span>Detained subjects</span><small>Excel detention workbooks can include the college subject-code legend. Student name, section, and mobile are optional. Scanned PDFs are not supported.</small></div>
+      <div className="detention-requirements"><b>Auto-detected columns</b><span>Registration / roll number</span><span>AVG / average attendance</span><span>Detained subjects (optional)</span><small>CSV and XLSX headers can be in different rows or columns; student name and branch are optional. Your college&apos;s text-based provisional detention PDF is supported. Scanned/image-only PDFs need OCR first. Other file types must be saved as CSV, XLSX, or PDF.</small><a className="detention-template-link" href="/detention-list-template.csv" download>Download detention-list CSV template</a><small>Replace the example row. Keep the registration number and average attendance; subject codes can be separated with semicolons. This upload is already scoped to Section {sectionName}.</small></div>
       <div className="detention-controls">
         <label className="detention-date-field">List date<input type="date" value={date} onChange={event => setDate(event.target.value)} /></label>
         <label className="detention-file-picker"><input type="file" accept=".pdf,.csv,.xlsx,application/pdf,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={event => { setFile(event.target.files?.[0] ?? null); setPreview(null); setMessage(""); setConfirmRequired(false); }} /><span>{file ? file.name : "Choose a detention list"}</span><small>{file ? `${(file.size / 1024).toFixed(0)} KB` : "Text PDF, CSV, or XLSX · max 10 MB"}</small></label>
@@ -87,7 +87,7 @@ export default function DetentionUploader({ sectionId, sectionName = "this secti
         <div className="detention-preview-heading"><div><span className="eyebrow">REVIEW BEFORE APPLYING</span><h3>List preview</h3></div><span>{preview.blocksFound} blocks · {preview.parsedCount} rows</span></div>
         <div className="detention-stats"><div><b>{preview.matchedCount}</b><span>Matched here</span></div><div><b>{preview.detainedCount}</b><span>Below 75%</span></div><div><b>{preview.atOrAboveThreshold}</b><span>At or above</span></div><div><b>{preview.unmatchedCount}</b><span>Unmatched</span></div><div><b>{preview.notListed}</b><span>Not in file</span></div></div>
         {preview.exactly75 > 0 && <p className="detention-threshold-note">{preview.exactly75} student(s) are exactly at the 75% threshold and will not be marked detained.</p>}
-        {!!preview.unmatched.length && <div className="detention-unmatched"><div><h4>Unmatched rows</h4><p>These entries do not currently match a student in {sectionName}.</p></div><div className="detention-unmatched-list">{preview.unmatched.slice(0, 30).map(student => <p key={student.regNo}><b>{student.regNo}</b><span>{student.name || "Name not parsed"}</span><span>{student.branch || sectionName}</span><span>{student.avg}%</span></p>)}</div><button type="button" disabled={busy} onClick={() => void request("add-unmatched")} className="detention-secondary-button">Add unmatched students</button></div>}
+        {!!preview.unmatched.length && <div className="detention-unmatched"><div><h4>Unmatched rows</h4><p>These entries do not currently match a student in {sectionName}.</p></div><div className="detention-unmatched-list">{preview.unmatched.slice(0, 30).map(student => <p key={student.regNo}><b>{student.regNo}</b><span>{student.name || "Name not parsed"}</span><span>{student.branch || sectionName}</span><span>{student.avg}%</span></p>)}</div>{allowAddUnmatched && <button type="button" disabled={busy} onClick={() => void request("add-unmatched")} className="detention-secondary-button">Add unmatched students</button>}</div>}
         <div className="detention-preview-actions"><span>Applying updates attendance and detention status for matched students.</span><button type="button" disabled={busy || (confirmRequired && !older)} onClick={() => void request("apply", older)} className="detention-primary-button">{busy ? "Applying…" : "Apply detention list"}</button></div>
       </div>}
     </section>
