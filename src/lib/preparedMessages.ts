@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { createHash } from "node:crypto";
-import { compileTemplate, getSmsMetrics, getTrilingualSmsTemplate, getTrilingualWhatsAppTemplate, normalizeSmsText, toAsciiSms } from "@/lib/messageTemplates";
+import { compileTemplate, getSmsMetrics, getTrilingualSmsTemplate, getTrilingualWhatsAppTemplate, normalizeSmsText, sanitizeSmsTemplate, toAsciiSms } from "@/lib/messageTemplates";
 import { normalizeIndianMobile } from "@/lib/phone";
 import { parseDetainedSubjects } from "@/lib/detentionSubjects";
 import { DEFAULT_ATTENDANCE_THRESHOLD, formatAttendance, getEffectiveAttendance, getStatus } from "@/lib/attendance";
@@ -13,7 +13,9 @@ type TemplateValues = Record<string, string | number | null | undefined>;
 type TemplateRenderer = (values: TemplateValues) => string;
 export type PreparedTextInput = { template: string; studentName: string; regNo: string; section: string; avg: number | null; subjects: string[]; date: Date; senderName: string; senderMobile: string; collegeName: string; department: string; testMode: boolean; channel?: "SMS" | "WHATSAPP" };
 export function buildPreparedText(input: PreparedTextInput, renderer?: TemplateRenderer) {
-  const rendered = (renderer || compileTemplate(input.template))({
+  const template = input.channel === "SMS" ? sanitizeSmsTemplate(input.template) : input.template;
+  const activeRenderer = template === input.template && renderer ? renderer : compileTemplate(template);
+  const rendered = activeRenderer({
     student_name: input.studentName, reg_no: input.regNo, section: input.section,
     avg: formatAttendance(input.avg), detained_count: input.subjects.length ? input.subjects.length : "",
     subjects: input.subjects.join("\n"), subjects_short: input.subjects.slice(0, 3).join(", ") + (input.subjects.length > 3 ? ` and ${input.subjects.length - 3} more` : ""),
@@ -32,12 +34,9 @@ export function buildPreparedText(input: PreparedTextInput, renderer?: TemplateR
   // Existing installations may have an older, verbose template saved in Settings.
   // Preserve its key data, but keep generated SMS within the supported two-part limit.
   const testPrefix = input.testMode ? `[TEST for ${input.studentName}] ` : "";
-  const intro = `Dear Parent, ${input.studentName} (Reg ${input.regNo}) has ${formatAttendance(input.avg) ?? ""}% attendance, below 75%.`;
+  const intro = `Dear Parent, ${input.studentName} (Reg ${input.regNo}) has ${formatAttendance(input.avg) ?? ""}% average attendance, below 75%. Please tell your child to attend regular classes.`;
   const ending = ` Contact ${input.senderName} (${input.senderMobile}). -${input.collegeName}`;
-  const subjectText = input.subjects.join(", ");
-  const available = Math.max(0, 306 - testPrefix.length - intro.length - ending.length - (subjectText ? " Detained: .".length + 3 : 0));
-  const detail = subjectText ? ` Detained: ${subjectText.slice(0, available)}${subjectText.length > available ? "..." : ""}.` : "";
-  const compact = toAsciiSms(`${testPrefix}${intro}${detail}${ending}`);
+  const compact = toAsciiSms(`${testPrefix}${intro}${ending}`);
   return compact.length <= 306 ? compact : `${compact.slice(0, 303)}...`;
 }
 

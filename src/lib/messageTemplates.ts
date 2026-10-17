@@ -7,9 +7,9 @@ export const MESSAGE_LANGUAGE_LABELS: Record<MessageLanguage, string> = {
 };
 
 export const DEFAULT_SMS_TEMPLATES: Record<MessageLanguage, string> = {
-  en: "Dear Parent, {student_name} (Reg {reg_no}) has {avg}% attendance, below 75%.{?subjects} Detained in {detained_count} subjects.{/subjects} Please contact {sender_name} ({sender_mobile}). -{college_name}",
-  hi: "प्रिय अभिभावक, {student_name} (पंजीकरण {reg_no}) की उपस्थिति {avg}% है, 75% से कम।{?subjects} {detained_count} विषयों में कमी है।{/subjects} संपर्क: {sender_name} ({sender_mobile})। -{college_name}",
-  mr: "प्रिय पालक, {student_name} (नोंदणी {reg_no}) यांची उपस्थिती {avg}% आहे, 75% पेक्षा कमी.{?subjects} {detained_count} विषयांत कमी आहे.{/subjects} संपर्क: {sender_name} ({sender_mobile}). -{college_name}",
+  en: "Dear Parent, {student_name} (Reg {reg_no}) has {avg}% average attendance, below 75%. Please tell your child to attend regular classes. Please contact {sender_name} ({sender_mobile}). -{college_name}",
+  hi: "प्रिय अभिभावक, {student_name} (पंजीकरण {reg_no}) की औसत उपस्थिति {avg}% है, 75% से कम। कृपया अपने बच्चे को नियमित रूप से कक्षाओं में आने के लिए कहें। संपर्क: {sender_name} ({sender_mobile})। -{college_name}",
+  mr: "प्रिय पालक, {student_name} (नोंदणी {reg_no}) यांची सरासरी उपस्थिती {avg}% आहे, 75% पेक्षा कमी. कृपया आपल्या पाल्याला नियमितपणे वर्गात उपस्थित राहण्यास सांगा. संपर्क: {sender_name} ({sender_mobile}). -{college_name}",
 };
 
 export const DEFAULT_WHATSAPP_TEMPLATES: Record<MessageLanguage, string> = {
@@ -23,7 +23,64 @@ export const DEFAULT_TRILINGUAL_SMS_TEMPLATE = `ENGLISH\n${DEFAULT_SMS_TEMPLATES
 export const DEFAULT_TRILINGUAL_WHATSAPP_TEMPLATE = `ENGLISH\n${DEFAULT_WHATSAPP_TEMPLATES.en}\n\nहिन्दी\n${DEFAULT_WHATSAPP_TEMPLATES.hi}\n\nमराठी\n${DEFAULT_WHATSAPP_TEMPLATES.mr}`;
 
 export function getTrilingualSmsTemplate(settings: Record<string, string | undefined>) {
-  return settings.smsTemplateAllLanguages || DEFAULT_TRILINGUAL_SMS_TEMPLATE;
+  return sanitizeSmsTemplate(upgradeTrilingualSmsTemplate(settings.smsTemplateAllLanguages || DEFAULT_TRILINGUAL_SMS_TEMPLATE));
+}
+
+/** Remove detained-subject details from both current and previously saved SMS templates. */
+export function sanitizeSmsTemplate(template: string) {
+  return template
+    .replace(/\{\?subjects\}[\s\S]*?\{\/subjects\}/gi, "")
+    .replace(/\s*Detained in\s*(?:\{detained_count\}|\d+)\s*subjects?\.?/gi, "")
+    .replace(/\s*(?:\{detained_count\}|\d+)\s*विषयों? में कमी है।?/g, "")
+    .replace(/\s*(?:\{detained_count\}|\d+)\s*विषयांत? कमी आहे\.?/g, "")
+    .replace(/(?:Detained subjects|कम उपस्थिति वाले विषय|कमी उपस्थितीचे विषय)\s*:\s*\n?\s*\{subjects\}\s*/gi, "")
+    .replace(/(?:Detained subjects|कम उपस्थिति वाले विषय|कमी उपस्थितीचे विषय)\s*:?\s*/gi, "")
+    .replace(/\{subjects(?:_short)?\}/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
+/** Keep existing saved templates in sync with the required multilingual attendance reminder. */
+export function upgradeTrilingualSmsTemplate(template: string) {
+  const reminders: Record<MessageLanguage, string> = {
+    en: "Please tell your child to attend regular classes.",
+    hi: "कृपया अपने बच्चे को नियमित रूप से कक्षाओं में आने के लिए कहें।",
+    mr: "कृपया आपल्या पाल्याला नियमितपणे वर्गात उपस्थित राहण्यास सांगा.",
+  };
+  const sentencePatterns: Record<MessageLanguage, RegExp> = {
+    en: /\{avg\}%[^.]*below 75%\./i,
+    hi: /की (?:औसत )?उपस्थिति\s+\{avg\}%[^।]*75% से कम।/,
+    mr: /यांची (?:सरासरी )?उपस्थिती\s+\{avg\}%[^.]*75% पेक्षा कमी\./,
+  };
+  const attendanceWording: Record<MessageLanguage, (sentence: string) => string> = {
+    en: sentence => sentence.replace(/\{avg\}%\s+attendance/i, "{avg}% average attendance"),
+    hi: sentence => sentence.replace("की उपस्थिति", "की औसत उपस्थिति"),
+    mr: sentence => sentence.replace("यांची उपस्थिती", "यांची सरासरी उपस्थिती"),
+  };
+  const languageHeader = /^(ENGLISH|हिन्दी|मराठी)\s*$/gm;
+  const matches = [...template.matchAll(languageHeader)];
+  if (!matches.length) return template;
+
+  let result = template;
+  for (let index = matches.length - 1; index >= 0; index -= 1) {
+    const match = matches[index];
+    const language: MessageLanguage = match[1] === "ENGLISH" ? "en" : match[1] === "हिन्दी" ? "hi" : "mr";
+    const start = match.index! + match[0].length;
+    const end = index + 1 < matches.length ? matches[index + 1].index! : template.length;
+    let block = result.slice(start, end);
+    const pattern = sentencePatterns[language];
+    const sentence = block.match(pattern)?.[0];
+    if (sentence) {
+      const updatedSentence = attendanceWording[language](sentence);
+      block = block.replace(pattern, updatedSentence);
+      if (!block.includes(reminders[language])) block = block.replace(updatedSentence, `${updatedSentence} ${reminders[language]}`);
+    } else if (!block.includes(reminders[language])) {
+      block = `${block.trimEnd()} ${reminders[language]}\n\n`;
+    }
+    result = `${result.slice(0, start)}${block}${result.slice(end)}`;
+  }
+  return result;
 }
 
 export function getTrilingualWhatsAppTemplate(settings: Record<string, string | undefined>) {
