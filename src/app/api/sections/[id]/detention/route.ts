@@ -5,7 +5,7 @@ import { z } from "zod";
 import { extractText, getDocumentProxy } from "unpdf";
 import { currentUser } from "@/lib/auth";
 import { db } from "@/lib/db";
-import { isDetained } from "@/lib/attendance";
+import { detentionListAttendanceUpdate, isDetained } from "@/lib/attendance";
 import { parseDetentionPdfPages } from "@/lib/detentionPdf";
 import { resolveDetainedSubjectCodes } from "@/lib/detentionSubjects";
 import { regeneratePreparedMessages } from "@/lib/preparedMessages";
@@ -244,7 +244,7 @@ export async function POST(request: Request, { params }: Context) {
       if (exists) continue;
       await db.student.create({ data: {
         regNo: row.regNo, name: row.name || row.regNo, sectionId, parentMobile: "", studentMobile: null,
-        branch: row.branch || null, avgAtt: row.avg, isDetained: isDetained(row.avg, threshold),
+        branch: row.branch || null, ...detentionListAttendanceUpdate(row.avg, row.subjects.length, date, threshold),
         detainedSubjects: JSON.stringify(row.subjects), lowSubjectCount: row.subjects.length, lastListDate: date,
       } });
       added++;
@@ -273,7 +273,7 @@ export async function POST(request: Request, { params }: Context) {
         await tx.student.update({ where: { id: student.id }, data: { avgAtt: null, isDetained: false, detainedSubjects: "[]", lowSubjectCount: 0, lastListDate: date } });
         continue;
       }
-      await tx.student.update({ where: { id: student.id }, data: { avgAtt: row.avg, isDetained: isDetained(row.avg, threshold), detainedSubjects: JSON.stringify(row.subjects), lowSubjectCount: row.subjects.length, lastListDate: date } });
+      await tx.student.update({ where: { id: student.id }, data: { ...detentionListAttendanceUpdate(row.avg, row.subjects.length, date, threshold), isDetained: isDetained(row.avg, threshold), detainedSubjects: JSON.stringify(row.subjects) } });
       await tx.detentionEntry.create({ data: { uploadId, studentId: student.id, avgAtt: row.avg, detainedSubjects: JSON.stringify(row.subjects) } });
     }
   }, { maxWait: 10_000, timeout: 30_000 });

@@ -10,6 +10,27 @@ export type AttendanceRecord = {
 export type EffectiveAttendance = { pct: number | null; source: "LIST" | "ROSTER" | "NONE"; listDate: Date | string | null };
 export type StudentStatus = "Detained" | `AVG OK (low in ${number} subjects)` | "On track" | "No data";
 
+export function manualAttendanceOverride(pct: number | null) {
+  return {
+    totalAttendancePct: pct,
+    avgAtt: null,
+    isDetained: false,
+    detainedSubjects: "[]",
+    lowSubjectCount: 0,
+    lastListDate: null,
+  };
+}
+
+export function detentionListAttendanceUpdate(pct: number, subjectCount: number, listDate: Date, threshold = DEFAULT_ATTENDANCE_THRESHOLD) {
+  return {
+    totalAttendancePct: pct,
+    avgAtt: pct,
+    isDetained: pct < threshold,
+    lowSubjectCount: subjectCount,
+    lastListDate: listDate,
+  };
+}
+
 export function getEffectiveAttendance(student: AttendanceRecord): EffectiveAttendance {
   const inLatestList = student.avgAtt !== null && student.lastListDate !== null;
   if (inLatestList) return { pct: student.avgAtt, source: "LIST", listDate: student.lastListDate };
