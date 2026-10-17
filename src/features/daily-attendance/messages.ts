@@ -1,6 +1,12 @@
 import { compileTemplate, getSmsMetrics, normalizeSmsText } from "@/lib/messageTemplates";
 
-export const DEFAULT_ABSENCE_SMS_TEMPLATE = `ENGLISH\n{student_name} (Registration No. {reg_no}) was absent today ({date}).\n\nहिन्दी\n{student_name} (पंजीकरण संख्या {reg_no}) आज अनुपस्थित थे/थीं ({date_hi})।\n\nमराठी\n{student_name} (नोंदणी क्रमांक {reg_no}) आज अनुपस्थित होते/होत्या ({date_mr}).`;
+const ABSENCE_MESSAGE_SIGNATURES = [
+  "From B.Tech First Year, GH Raisoni University, Amravati.",
+  "बी.टेक प्रथम वर्ष, जी.एच. रायसोनी विश्वविद्यालय, अमरावती की ओर से।",
+  "बी.टेक प्रथम वर्ष, जी. एच. रायसोनी विद्यापीठ, अमरावतीकडून.",
+];
+
+export const DEFAULT_ABSENCE_SMS_TEMPLATE = `ENGLISH\n{student_name} (Registration No. {reg_no}) was absent today ({date}).\n${ABSENCE_MESSAGE_SIGNATURES[0]}\n\nहिन्दी\n{student_name} (पंजीकरण संख्या {reg_no}) आज अनुपस्थित थे/थीं ({date_hi})।\n${ABSENCE_MESSAGE_SIGNATURES[1]}\n\nमराठी\n{student_name} (नोंदणी क्रमांक {reg_no}) आज अनुपस्थित होते/होत्या ({date_mr}).\n${ABSENCE_MESSAGE_SIGNATURES[2]}`;
 export const DEFAULT_ABSENCE_WHATSAPP_TEMPLATE = DEFAULT_ABSENCE_SMS_TEMPLATE;
 
 // Queued rows can belong to sessions cancelled before sending. Only confirmed
@@ -9,15 +15,26 @@ export const ABSENCE_DUPLICATE_STATUSES = ["SENT", "OPENED", "SENT_BY_USER"] as 
 
 export function ensureTrilingualAbsenceTemplate(saved: string | undefined, fallback: string) {
   if (!saved?.trim()) return fallback;
+  const addLocalizedSignatures = (template: string) => {
+    const withoutSignatures = template
+      .split("\n")
+      .filter(line => !ABSENCE_MESSAGE_SIGNATURES.includes(line.trim()))
+      .join("\n")
+      .trim();
+    return withoutSignatures
+      .replace(/\n\s*(हिन्दी\s*\n)/, `\n${ABSENCE_MESSAGE_SIGNATURES[0]}\n\n$1`)
+      .replace(/\n\s*(मराठी\s*\n)/, `\n${ABSENCE_MESSAGE_SIGNATURES[1]}\n\n$1`)
+      .concat(`\n${ABSENCE_MESSAGE_SIGNATURES[2]}`);
+  };
   const placeholders = [...saved.matchAll(/\{\s*([a-z_]+)\s*\}/gi)].map(match => match[1].toLowerCase());
   const allowed = new Set(["student_name", "reg_no", "date", "date_hi", "date_mr"]);
   const hasThreeLanguages = /^ENGLISH\s*$/m.test(saved) && /^हिन्दी\s*$/m.test(saved) && /^मराठी\s*$/m.test(saved);
   const hasLocalizedDates = placeholders.includes("date_hi") && placeholders.includes("date_mr");
   if (placeholders.some(placeholder => !allowed.has(placeholder))) return fallback;
-  if (hasThreeLanguages) return hasLocalizedDates ? saved : fallback;
+  if (hasThreeLanguages) return hasLocalizedDates ? addLocalizedSignatures(saved) : fallback;
   const hindi = fallback.match(/^हिन्दी\s*\n([\s\S]*?)(?=\n\s*मराठी\s*$)/m)?.[1]?.trim() || "";
   const marathi = fallback.match(/^मराठी\s*\n([\s\S]*)$/m)?.[1]?.trim() || "";
-  return `ENGLISH\n${saved.trim()}\n\nहिन्दी\n${hindi}\n\nमराठी\n${marathi}`;
+  return addLocalizedSignatures(`ENGLISH\n${saved.trim()}\n\nहिन्दी\n${hindi}\n\nमराठी\n${marathi}`);
 }
 
 export type AbsenceTemplateValues = {
